@@ -1,4 +1,5 @@
 mod constants;
+mod oids;
 
 extern crate widestring;
 
@@ -9,13 +10,24 @@ use std::string::ToString;
 use widestring::WideCString;
 
 pub use self::constants::*;
+pub use self::oids::*;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CryptoAttribute {
     pub obj_id: *const u8,
     pub c_value: u32,
     pub rg_value: *const CryptoApiBlob,
+}
+
+impl Default for CryptoAttribute {
+    fn default() -> CryptoAttribute {
+        CryptoAttribute {
+            obj_id: null(),
+            c_value: 0,
+            rg_value: null(),
+        }
+    }
 }
 
 #[repr(C)]
@@ -32,6 +44,15 @@ pub struct CryptoAlgorithmIdentifier {
     pub parameters: CryptoApiBlob,
 }
 
+impl Default for CryptoAlgorithmIdentifier {
+    fn default() -> CryptoAlgorithmIdentifier {
+        CryptoAlgorithmIdentifier {
+            obj_id: null(),
+            parameters: Default::default(),
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct CryptoApiBlob {
@@ -39,26 +60,10 @@ pub struct CryptoApiBlob {
     pub data: *mut u8,
 }
 
-#[repr(C)]
-#[derive(Clone, Debug)]
-pub struct CryptoApiSerialNumberBlob {
-    pub len: u32,
-    pub data: *mut u8,
-}
-
-impl ToString for CryptoApiSerialNumberBlob {
-    fn to_string(&self) -> String {
-        match self.len {
-            0 => "".to_owned(),
-            _ => {
-                let x = unsafe { from_raw_parts_mut(self.data, self.len as usize) };
-                x.reverse();
-                let x: Vec<String> = x.iter().map(|i| {
-                    format!("{:02x}", i)
-                }).collect();
-                x.join("").to_owned()
-            }
-        }
+impl CryptoApiBlob {
+    pub fn from(&mut self, blob: &CryptoApiBlob) {
+        self.len = blob.len;
+        self.data = blob.data;
     }
 }
 
@@ -75,6 +80,54 @@ impl ToString for CryptoApiBlob {
         }
 
         String::from_utf8(data[0..data.len()-1].to_vec()).unwrap_or("(unknown)".to_owned())
+    }
+}
+
+impl Default for CryptoApiBlob {
+    fn default() -> CryptoApiBlob {
+        CryptoApiBlob {
+            len: 0,
+            data: null_mut(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Debug)]
+pub struct CryptoApiSerialNumberBlob {
+    pub len: u32,
+    pub data: *mut u8,
+}
+
+impl Default for CryptoApiSerialNumberBlob {
+    fn default() -> CryptoApiSerialNumberBlob {
+        CryptoApiSerialNumberBlob {
+            len: 0,
+            data: null_mut(),
+        }
+    }
+}
+
+impl CryptoApiSerialNumberBlob {
+    pub fn from(&mut self, blob: &CryptoApiSerialNumberBlob) {
+        self.len = blob.len;
+        self.data = blob.data;
+    }
+}
+
+impl ToString for CryptoApiSerialNumberBlob {
+    fn to_string(&self) -> String {
+        match self.len {
+            0 => "".to_owned(),
+            _ => {
+                let x = unsafe { from_raw_parts_mut(self.data, self.len as usize) };
+                x.reverse();
+                let x: Vec<String> = x.iter().map(|i| {
+                    format!("{:02x}", i)
+                }).collect();
+                x.join("").to_owned()
+            }
+        }
     }
 }
 
@@ -227,9 +280,6 @@ impl FileHandle {
 
 impl Drop for FileHandle {
     fn drop(&mut self) {
-        if let Some(ref p) = self.path {
-            println!("Dropping handle to {}", p);
-        }
         if let Some(ref h) = self.handle {
             unsafe { CloseHandle(*h); }
         }
@@ -248,6 +298,104 @@ impl Default for CatalogInfo {
         CatalogInfo {
             size: size_of::<CatalogInfo>() as u32,
             catalog_file: [0; MAX_PATH],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug,Default)]
+pub struct FileTime {
+    u1: u32,
+    u2: u32,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CryptoBitBlob {
+    pub size: u32,
+    pub data: *const u8,
+    pub unused_bits: u32,
+}
+
+impl Default for CryptoBitBlob {
+    fn default() -> CryptoBitBlob {
+        CryptoBitBlob {
+            size: 0,
+            data: null(),
+            unused_bits: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct CertPublicKeyInfo {
+    pub algorithm: CryptoAlgorithmIdentifier,
+    pub public_key: CryptoBitBlob,
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct CertInfo {
+    pub version: u32,
+    pub serial_number: CryptoApiSerialNumberBlob,
+    pub signature_algorithm: CryptoAlgorithmIdentifier,
+    pub issuer: CryptoApiBlob,
+    pub not_before: FileTime,
+    pub not_after: FileTime,
+    pub subject: CryptoApiBlob,
+    pub subject_public_key_info: CertPublicKeyInfo,
+    pub issuer_unique_id: CryptoBitBlob,
+    pub subject_unique_id: CryptoBitBlob,
+    pub c_extension: u32,
+    pub rg_extension: *const u8,
+}
+
+impl Default for CertInfo {
+    fn default() -> CertInfo {
+        CertInfo {
+            version: 0,
+            serial_number: Default::default(),
+            signature_algorithm: Default::default(),
+            issuer: Default::default(),
+            not_before: Default::default(),
+            not_after: Default::default(),
+            subject: Default::default(),
+            subject_public_key_info: Default::default(),
+            issuer_unique_id: Default::default(),
+            subject_unique_id: Default::default(),
+            c_extension: 0,
+            rg_extension: null(),
+        }
+    }
+}
+
+pub struct CertStoreContext {
+    context: Option<*const u8>,
+}
+
+impl CertStoreContext {
+    pub fn new(ctx: *const u8) -> CertStoreContext {
+        return match ctx {
+            i if i as usize == 0 => CertStoreContext { context: None },
+            _ => CertStoreContext { context: Some(ctx)}
+        }
+    }
+
+    pub fn context(&self) -> *const u8 {
+        match self.context {
+            Some(ctx) => ctx,
+            None => null()
+        }
+    }
+}
+
+impl Drop for CertStoreContext {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.context {
+            unsafe {
+                CertFreeCertificateContext(ctx);
+            }
         }
     }
 }
@@ -316,6 +464,28 @@ extern "system" {
         info: *mut CatalogInfo,
         flags: u32
     ) -> u32;
+
+    pub fn CertFindCertificateInStore(
+        cert_store: *const u8,
+        cert_encoding_type: u32,
+        find_flags: u32,
+        find_type: u32,
+        find_para: *const CertInfo,
+        prev_cert_context: *const u8,
+    ) -> *const u8;
+
+    pub fn CertGetNameStringA(
+        cert_context: *const u8,
+        name_type: u32,
+        flags: u32,
+        type_para: *const u8,
+        name_string: *const u8,
+        name_length: u32
+    ) -> u32;
+
+    pub fn CertFreeCertificateContext(
+        context: *const u8
+    ) -> u32;
 }
 
 #[link(name = "wintrust")]
@@ -328,6 +498,9 @@ extern "system" {
 }
 
 extern "system" {
+    #[allow(dead_code)]
+    pub fn GetLastError() -> u32;
+
     pub fn CloseHandle(handle: *const u8) -> u32;
 
     pub fn CreateFileW(

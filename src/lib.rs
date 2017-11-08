@@ -2,11 +2,8 @@ mod winapi;
 
 extern crate widestring;
 
-use std::mem::uninitialized;
 use std::ptr::{null_mut, null, read};
-
 use widestring::WideCString;
-
 use winapi::*;
 
 #[derive(Clone,Default,Debug)]
@@ -33,10 +30,7 @@ impl CodeSigned {
             match unsafe {
                 WinVerifyTrust(null(), &action, &win_trust_data)
             } {
-                0 => {
-                    self.embedded(&path);
-                    self.catalog(&path);
-                },
+                0 => self.embedded(&path),
                 _ => self.catalog(&path)
             }
 
@@ -49,8 +43,8 @@ impl CodeSigned {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
-        let mut h_store: *mut u8 = unsafe { uninitialized() };
-        let mut h_msg: *mut u8 = unsafe { uninitialized() };
+        let mut h_store: *mut u8 = null_mut();
+        let mut h_msg: *mut u8 = null_mut();
 
 
         match unsafe {
@@ -96,8 +90,47 @@ impl CodeSigned {
                         let msg: MsgSignerInfo = unsafe {
                             read(data.as_mut_ptr() as *const _)
                         };
+
+                        let mut cert_info = CertInfo::default();
+                        cert_info.serial_number.from(&msg.serial_number);
+                        cert_info.issuer.from(&msg.issuer);
+
+                        let context = CertStoreContext::new(unsafe {
+                            CertFindCertificateInStore(
+                                h_store,
+                                ENCODING,
+                                0,
+                                CERT_FIND_SUBJECT_CERT,
+                                &cert_info,
+                                null()
+                            )
+                        });
+
+                        let mut needed: u32 = unsafe {
+                            CertGetNameStringA(
+                                context.context(),
+                                CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                                0,
+                                null(),
+                                null(),
+                                0
+                            )
+                        };
+                        let mut subject_name_data: Vec<u8> = vec![0; needed as usize];
+                        unsafe {
+                            CertGetNameStringA(
+                                context.context(),
+                                CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                                0,
+                                null(),
+                                subject_name_data.as_mut_ptr(),
+                                needed as u32
+                            );
+                        }
+
                         self.serial_number = msg.serial_number.to_string();
                         self.issuer_name = msg.issuer.to_string();
+                        self.subject_name = String::from_utf8((&subject_name_data[0..needed as usize -1]).to_vec()).unwrap_or("(unknown)".to_owned());
                         self.signed = true;
                     }
                 }
