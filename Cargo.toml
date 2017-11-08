@@ -1,0 +1,7 @@
+[package]
+name = "codesigned"
+version = "0.0.1"
+authors = ["russ <rmorris@infocyte.com>"]
+
+[dependencies]
+widestring = "*"
