@@ -8,14 +8,14 @@ use winapi::*;
 
 #[derive(Clone,Default,Debug)]
 pub struct CodeSigned {
-    path: String,
-    signed: bool,
-    catalog: bool,
-    issuer_name: String,
-    subject_name: String,
-    timestamp_issuer_name: String,
-    timestamp_subject_name: String,
-    serial_number: String,
+    pub path: String,
+    pub signed: bool,
+    pub catalog: bool,
+    pub issuer_name: String,
+    pub subject_name: String,
+    pub timestamp_issuer_name: String,
+    pub timestamp_subject_name: String,
+    pub serial_number: String,
 }
 
 impl CodeSigned {
