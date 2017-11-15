@@ -465,6 +465,11 @@ extern "system" {
         flags: u32
     ) -> u32;
 
+    pub fn CryptCATAdminReleaseContext(
+        hCatAdmin: *const u8,
+        dwFlags: u32
+    ) -> u32;
+
     pub fn CertFindCertificateInStore(
         cert_store: *const u8,
         cert_encoding_type: u32,
@@ -485,6 +490,15 @@ extern "system" {
 
     pub fn CertFreeCertificateContext(
         context: *const u8
+    ) -> u32;
+
+    pub fn CertCloseStore(
+        cert_store: *const u8,
+        flags: u32
+    ) -> u32;
+
+    pub fn CryptMsgClose(
+        crypt_msg: *const u8
     ) -> u32;
 }
 

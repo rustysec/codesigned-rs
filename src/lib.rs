@@ -132,6 +132,10 @@ impl CodeSigned {
                         self.issuer_name = msg.issuer.to_string();
                         self.subject_name = String::from_utf8((&subject_name_data[0..needed as usize -1]).to_vec()).unwrap_or("(unknown)".to_owned());
                         self.signed = true;
+                        unsafe {
+                            CryptMsgClose(h_msg);
+                            CertCloseStore(h_store, 2);
+                        }
                     }
                 }
             }
@@ -150,7 +154,7 @@ impl CodeSigned {
                     0
                 )
             } {
-                0 => println!("Couldn't hash file!"),
+                0 => println!("Couldn't hash {}!", path.to_string_lossy()),
                 _ => {
                     let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
                     unsafe {
@@ -185,6 +189,7 @@ impl CodeSigned {
 
                     unsafe {
                         CryptCATAdminReleaseCatalogContext(admin_context, cat, 0);
+                        CryptCATAdminReleaseContext(admin_context, 0);
                     }
                 }
             }
