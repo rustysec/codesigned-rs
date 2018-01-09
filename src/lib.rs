@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate log;
+
 mod winapi;
 
 extern crate widestring;
@@ -9,7 +12,7 @@ use winapi::*;
 #[derive(Clone,Default,Debug)]
 pub struct CodeSigned {
     pub path: String,
-    pub signed: bool,
+    pub signed: Option<bool>,
     pub catalog: bool,
     pub issuer_name: String,
     pub subject_name: String,
@@ -131,7 +134,7 @@ impl CodeSigned {
                         self.serial_number = msg.serial_number.to_string();
                         self.issuer_name = msg.issuer.to_string();
                         self.subject_name = String::from_utf8((&subject_name_data[0..needed as usize -1]).to_vec()).unwrap_or("(unknown)".to_owned());
-                        self.signed = true;
+                        self.signed = Some(true);
                         unsafe {
                             CryptMsgClose(h_msg);
                             CertCloseStore(h_store, 2);
@@ -154,8 +157,9 @@ impl CodeSigned {
                     0
                 )
             } {
-                0 => println!("Couldn't hash {}!", path.to_string_lossy()),
+                0 => warn!("Could not obtain file hash for {}", path.to_string_lossy()),
                 _ => {
+                    self.signed = Some(false);
                     let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
                     unsafe {
                         CryptCATAdminCalcHashFromFileHandle(

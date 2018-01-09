@@ -5,3 +5,4 @@ authors = ["russ <rmorris@infocyte.com>"]
 
 [dependencies]
 widestring = "*"
+log = "*"
