@@ -3,19 +3,19 @@ mod oids;
 
 extern crate widestring;
 
-use std::mem::{ size_of };
+pub use self::constants::*;
+pub use self::oids::*;
+use std::mem::size_of;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
 use std::string::ToString;
 use widestring::WideCString;
-
-pub use self::constants::*;
-pub use self::oids::*;
+use winapi::{ctypes::c_void, shared::minwindef::DWORD};
 
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct CryptoAttribute {
-    pub obj_id: *const u8,
+    pub obj_id: *const c_void,
     pub c_value: u32,
     pub rg_value: *const CryptoApiBlob,
 }
@@ -57,7 +57,7 @@ impl Default for CryptoAlgorithmIdentifier {
 #[derive(Clone, Debug)]
 pub struct CryptoApiBlob {
     pub len: u32,
-    pub data: *mut u8,
+    pub data: *mut c_void,
 }
 
 impl CryptoApiBlob {
@@ -69,17 +69,30 @@ impl CryptoApiBlob {
 
 impl ToString for CryptoApiBlob {
     fn to_string(&self) -> String {
-        let derp = self.clone();
+        let this = self.clone();
         let string_len = unsafe {
-            CertNameToStrA(X509_ASN_ENCODING, &derp as *const _, CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG, null_mut(), 0)
+            CertNameToStrA(
+                X509_ASN_ENCODING,
+                &this as *const _,
+                CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG,
+                null_mut(),
+                0,
+            )
         };
 
         let mut data: Vec<u8> = vec![0; string_len as usize];
         unsafe {
-            CertNameToStrA(X509_ASN_ENCODING, &derp as *const _, CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG, data.as_mut_ptr(), self.len);
+            CertNameToStrA(
+                X509_ASN_ENCODING,
+                &this as *const _,
+                CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG,
+                data.as_mut_ptr() as _,
+                self.len,
+            );
         }
 
-        String::from_utf8(data[0..data.len()-1].to_vec()).unwrap_or("(unknown)".to_owned())
+        String::from_utf8(data[0..data.len() - 1].to_vec())
+            .unwrap_or_else(|_| String::from("(unknown)"))
     }
 }
 
@@ -122,10 +135,8 @@ impl ToString for CryptoApiSerialNumberBlob {
             _ => {
                 let x = unsafe { from_raw_parts_mut(self.data, self.len as usize) };
                 x.reverse();
-                let x: Vec<String> = x.iter().map(|i| {
-                    format!("{:02x}", i)
-                }).collect();
-                x.join("").to_owned()
+                let x: Vec<String> = x.iter().map(|i| format!("{:02x}", i)).collect();
+                x.join("")
             }
         }
     }
@@ -144,8 +155,7 @@ pub struct MsgSignerInfo {
     pub unauth_attrs: CryptoAttributes,
 }
 
-impl MsgSignerInfo {
-}
+impl MsgSignerInfo {}
 
 #[repr(C)]
 pub struct Guid {
@@ -158,26 +168,25 @@ pub struct Guid {
 impl Guid {
     pub fn wintrust_action_generic_verify_v2() -> Guid {
         Guid {
-            data1: 0xaac56b,
+            data1: 0xaa_c56b,
             data2: 0xcd44,
             data3: 0x11d0,
-            data4: [0x8c,0xc2,0x00,0xc0,0x4f,0xc2,0x95,0xee]
+            data4: [0x8c, 0xc2, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee],
         }
     }
 
     pub fn driver_action_verify() -> Guid {
         Guid {
-            data1: 0xf750e6c3,
+            data1: 0xf750_e6c3,
             data2: 0x38ee,
             data3: 0x11d1,
-            data4: [0x85,0xe5,0x00,0xc0,0x4f,0xc2,0x95,0xee]
+            data4: [0x85, 0xe5, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee],
         }
     }
 }
 
 #[repr(C)]
-pub struct WinTrustFileInfo
-{
+pub struct WinTrustFileInfo {
     pub size: u32,
     pub file_path: *const u16,
     pub file_handle: *const u8,
@@ -204,8 +213,7 @@ impl WinTrustFileInfo {
 }
 
 #[repr(C)]
-pub struct WinTrustData
-{
+pub struct WinTrustData {
     pub size: u32,
     pub policy_callback_data: *const u8,
     pub sip_client_data: *const u8,
@@ -242,7 +250,7 @@ impl Default for WinTrustData {
 }
 
 pub struct FileHandle {
-    handle: Option<*const u8>,
+    handle: Option<*const c_void>,
     path: Option<String>,
 }
 
@@ -250,17 +258,25 @@ impl FileHandle {
     pub fn new() -> FileHandle {
         FileHandle {
             handle: None,
-            path: None
+            path: None,
         }
     }
 
-    pub fn handle(&self) -> Option<*const u8> {
+    pub fn handle(&self) -> Option<*const c_void> {
         self.handle
     }
 
     pub fn open_file(&mut self, path: &WideCString) {
         match unsafe {
-            CreateFileW(path.as_ptr(), GENERIC_READ, FILE_SHARE_READ, null(), OPEN_EXISTING, 0, null())
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ,
+                null(),
+                OPEN_EXISTING,
+                0,
+                null(),
+            )
         } {
             i if i as usize == 0 => println!("nope!"),
             f => {
@@ -281,14 +297,15 @@ impl FileHandle {
 impl Drop for FileHandle {
     fn drop(&mut self) {
         if let Some(ref h) = self.handle {
-            unsafe { CloseHandle(*h); }
+            unsafe {
+                CloseHandle(*h);
+            }
         }
     }
 }
 
 #[repr(C)]
-pub struct CatalogInfo
-{
+pub struct CatalogInfo {
     pub size: u32,
     pub catalog_file: [u16; MAX_PATH],
 }
@@ -303,7 +320,7 @@ impl Default for CatalogInfo {
 }
 
 #[repr(C)]
-#[derive(Debug,Default)]
+#[derive(Debug, Default)]
 pub struct FileTime {
     u1: u32,
     u2: u32,
@@ -313,7 +330,7 @@ pub struct FileTime {
 #[derive(Debug)]
 pub struct CryptoBitBlob {
     pub size: u32,
-    pub data: *const u8,
+    pub data: *const c_void,
     pub unused_bits: u32,
 }
 
@@ -348,7 +365,7 @@ pub struct CertInfo {
     pub issuer_unique_id: CryptoBitBlob,
     pub subject_unique_id: CryptoBitBlob,
     pub c_extension: u32,
-    pub rg_extension: *const u8,
+    pub rg_extension: *const c_void,
 }
 
 impl Default for CertInfo {
@@ -371,21 +388,21 @@ impl Default for CertInfo {
 }
 
 pub struct CertStoreContext {
-    context: Option<*const u8>,
+    context: Option<*const c_void>,
 }
 
 impl CertStoreContext {
-    pub fn new(ctx: *const u8) -> CertStoreContext {
-        return match ctx {
+    pub fn new(ctx: *const c_void) -> CertStoreContext {
+        match ctx {
             i if i as usize == 0 => CertStoreContext { context: None },
-            _ => CertStoreContext { context: Some(ctx)}
+            _ => CertStoreContext { context: Some(ctx) },
         }
     }
 
-    pub fn context(&self) -> *const u8 {
+    pub fn context(&self) -> *const c_void {
         match self.context {
             Some(ctx) => ctx,
-            None => null()
+            None => null(),
         }
     }
 }
@@ -403,127 +420,113 @@ impl Drop for CertStoreContext {
 #[link(name = "crypt32")]
 extern "system" {
     pub fn CryptQueryObject(
-        object_type: u32,
-        object: *const u8,
-        expected_content_type_flags: u32,
-        expected_format_type_flags: u32,
-        flags: u32,
-        msg_and_cert_encoding_type: *mut u32,
-        content_type: *mut u32,
-        format_type: *mut u32,
-        cert_store: *mut *mut u8,
-        msg: *mut *mut u8,
-        context: *mut *mut u8,
-    ) -> u32;
+        object_type: DWORD,
+        object: *const c_void,
+        expected_content_type_flags: DWORD,
+        expected_format_type_flags: DWORD,
+        flags: DWORD,
+        msg_and_cert_encoding_type: *mut DWORD,
+        content_type: *mut DWORD,
+        format_type: *mut DWORD,
+        cert_store: *mut *mut c_void,
+        msg: *mut *mut c_void,
+        context: *mut *mut c_void,
+    ) -> DWORD;
 
     pub fn CryptMsgGetParam(
-        crypt_msg: *const u8,
-        param_type: u32,
-        index: u32,
+        crypt_msg: *const c_void,
+        param_type: DWORD,
+        index: DWORD,
         data: *mut u8,
-        data_len: *mut u32
-    ) -> u32;
+        data_len: *mut DWORD,
+    ) -> DWORD;
 
     pub fn CertNameToStrA(
-        cert_encoding_type: u32,
+        cert_encoding_type: DWORD,
         name: *const CryptoApiBlob,
-        str_type: u32,
-        psz: *mut u8,
-        csz: u32
-    ) -> u32;
+        str_type: DWORD,
+        psz: *mut c_void,
+        csz: DWORD,
+    ) -> DWORD;
 
     pub fn CryptCATAdminAcquireContext(
-        admin: *mut *mut u8,
+        admin: *mut *mut c_void,
         action: *const Guid,
-        _: u32
-    ) -> u32;
+        _: DWORD,
+    ) -> DWORD;
 
     pub fn CryptCATAdminCalcHashFromFileHandle(
-        handle: *const u8,
-        hash_length: &mut u32,
-        hash: *mut u8,
-        flags: u32
-    ) -> u32;
+        handle: *const c_void,
+        hash_length: &mut DWORD,
+        hash: *mut c_void,
+        flags: DWORD,
+    ) -> DWORD;
 
     pub fn CryptCATAdminEnumCatalogFromHash(
-        cat_admin: *const u8,
-        hash: *const u8,
-        hash_lenght: u32,
-        flags: u32,
-        prev_cat_info: *mut *mut u8,
+        cat_admin: *const c_void,
+        hash: *const c_void,
+        hash_lenght: DWORD,
+        flags: DWORD,
+        prev_cat_info: *mut *mut c_void,
     ) -> *mut u8;
 
-    pub fn CryptCATAdminReleaseCatalogContext(
-        admin: *mut u8,
-        info: *mut u8,
-        flags: u32
-    ) -> u32;
+    pub fn CryptCATAdminReleaseCatalogContext(admin: *mut u8, info: *mut u8, flags: DWORD) -> u32;
 
     pub fn CryptCATCatalogInfoFromContext(
-        info_context: *const u8,
+        info_context: *const c_void,
         info: *mut CatalogInfo,
-        flags: u32
-    ) -> u32;
+        flags: DWORD,
+    ) -> DWORD;
 
-    pub fn CryptCATAdminReleaseContext(
-        hCatAdmin: *const u8,
-        dwFlags: u32
-    ) -> u32;
+    pub fn CryptCATAdminReleaseContext(hCatAdmin: *const c_void, dwFlags: DWORD) -> u32;
 
     pub fn CertFindCertificateInStore(
-        cert_store: *const u8,
-        cert_encoding_type: u32,
-        find_flags: u32,
-        find_type: u32,
+        cert_store: *const c_void,
+        cert_encoding_type: DWORD,
+        find_flags: DWORD,
+        find_type: DWORD,
         find_para: *const CertInfo,
-        prev_cert_context: *const u8,
-    ) -> *const u8;
+        prev_cert_context: *const c_void,
+    ) -> *const c_void;
 
     pub fn CertGetNameStringA(
-        cert_context: *const u8,
-        name_type: u32,
-        flags: u32,
-        type_para: *const u8,
-        name_string: *const u8,
-        name_length: u32
-    ) -> u32;
+        cert_context: *const c_void,
+        name_type: DWORD,
+        flags: DWORD,
+        type_para: *const c_void,
+        name_string: *const c_void,
+        name_length: DWORD,
+    ) -> DWORD;
 
-    pub fn CertFreeCertificateContext(
-        context: *const u8
-    ) -> u32;
+    pub fn CertFreeCertificateContext(context: *const c_void) -> DWORD;
 
-    pub fn CertCloseStore(
-        cert_store: *const u8,
-        flags: u32
-    ) -> u32;
+    pub fn CertCloseStore(cert_store: *const c_void, flags: DWORD) -> u32;
 
-    pub fn CryptMsgClose(
-        crypt_msg: *const u8
-    ) -> u32;
+    pub fn CryptMsgClose(crypt_msg: *const c_void) -> DWORD;
 }
 
 #[link(name = "wintrust")]
 extern "system" {
     pub fn WinVerifyTrust(
-        wnd: *const u8,
+        wnd: *const c_void,
         action_id: *const Guid,
-        wvt_data: *const WinTrustData
-    ) -> u32;
+        wvt_data: *const WinTrustData,
+    ) -> DWORD;
 }
 
 extern "system" {
     #[allow(dead_code)]
-    pub fn GetLastError() -> u32;
+    pub fn GetLastError() -> DWORD;
 
-    pub fn CloseHandle(handle: *const u8) -> u32;
+    pub fn CloseHandle(handle: *const c_void) -> DWORD;
 
     pub fn CreateFileW(
         file_name: *const u16,
-        desired_access: u32,
-        share_mode: u32,
-        security_attributes: *const u8,
-        creation_disposition: u32,
-        flags_and_attributes: u32,
-        template_file: *const u8,
-    ) -> *const u8;
+        desired_access: DWORD,
+        share_mode: DWORD,
+        security_attributes: *const c_void,
+        creation_disposition: DWORD,
+        flags_and_attributes: DWORD,
+        template_file: *const c_void,
+    ) -> *const c_void;
 }

@@ -1,15 +1,14 @@
 #[macro_use]
 extern crate log;
 
-mod winapi;
+mod api;
 
-extern crate widestring;
-
-use std::ptr::{null_mut, null, read};
+use api::*;
+use std::ptr::{null, null_mut, read};
 use widestring::WideCString;
-use winapi::*;
+use winapi::ctypes::c_void;
 
-#[derive(Clone,Default,Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct CodeSigned {
     pub path: String,
     pub signed: Option<bool>,
@@ -30,15 +29,15 @@ impl CodeSigned {
             win_trust_data.data = &mut file_info;
 
             let action = Guid::wintrust_action_generic_verify_v2();
-            match unsafe {
-                WinVerifyTrust(null(), &action, &win_trust_data)
-            } {
+            match unsafe { WinVerifyTrust(null(), &action, &win_trust_data) } {
                 0 => self.embedded(&path),
-                _ => self.catalog(&path)
+                _ => self.catalog(&path),
             }
 
             win_trust_data.state_action = WTD_STATEACTION_CLOSE;
-            unsafe { WinVerifyTrust(null(), &action, &win_trust_data); }
+            unsafe {
+                WinVerifyTrust(null(), &action, &win_trust_data);
+            }
         }
     }
 
@@ -46,9 +45,8 @@ impl CodeSigned {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
-        let mut h_store: *mut u8 = null_mut();
-        let mut h_msg: *mut u8 = null_mut();
-
+        let mut h_store: *mut c_void = null_mut();
+        let mut h_msg: *mut c_void = null_mut();
 
         match unsafe {
             CryptQueryObject(
@@ -62,20 +60,14 @@ impl CodeSigned {
                 &mut format_type,
                 &mut h_store,
                 &mut h_msg,
-                null_mut()
+                null_mut(),
             )
         } {
-            0 => { /* error */ },
+            0 => { /* error */ }
             _ => {
                 let mut data_len: u32 = 0;
                 unsafe {
-                    CryptMsgGetParam(
-                        h_msg,
-                        CMSG_SIGNER_INFO_PARAM,
-                        0,
-                        null_mut(),
-                        &mut data_len
-                    );
+                    CryptMsgGetParam(h_msg, CMSG_SIGNER_INFO_PARAM, 0, null_mut(), &mut data_len);
                 }
 
                 let mut data: Vec<u8> = vec![0; data_len as usize];
@@ -85,14 +77,12 @@ impl CodeSigned {
                         CMSG_SIGNER_INFO_PARAM,
                         0,
                         data.as_mut_ptr(),
-                        &mut data_len
+                        &mut data_len,
                     )
                 } {
-                    0 => { /* error */ },
+                    0 => { /* error */ }
                     _ => {
-                        let msg: MsgSignerInfo = unsafe {
-                            read(data.as_mut_ptr() as *const _)
-                        };
+                        let msg: MsgSignerInfo = unsafe { read(data.as_mut_ptr() as *const _) };
 
                         let mut cert_info = CertInfo::default();
                         cert_info.serial_number.from(&msg.serial_number);
@@ -105,18 +95,18 @@ impl CodeSigned {
                                 0,
                                 CERT_FIND_SUBJECT_CERT,
                                 &cert_info,
-                                null()
+                                null(),
                             )
                         });
 
-                        let mut needed: u32 = unsafe {
+                        let needed: u32 = unsafe {
                             CertGetNameStringA(
                                 context.context(),
                                 CERT_NAME_SIMPLE_DISPLAY_TYPE,
                                 0,
                                 null(),
                                 null(),
-                                0
+                                0,
                             )
                         };
                         let mut subject_name_data: Vec<u8> = vec![0; needed as usize];
@@ -126,14 +116,17 @@ impl CodeSigned {
                                 CERT_NAME_SIMPLE_DISPLAY_TYPE,
                                 0,
                                 null(),
-                                subject_name_data.as_mut_ptr(),
-                                needed as u32
+                                subject_name_data.as_mut_ptr() as _,
+                                needed as u32,
                             );
                         }
 
                         self.serial_number = msg.serial_number.to_string();
                         self.issuer_name = msg.issuer.to_string();
-                        self.subject_name = String::from_utf8((&subject_name_data[0..needed as usize -1]).to_vec()).unwrap_or("(unknown)".to_owned());
+                        self.subject_name = String::from_utf8(
+                            (&subject_name_data[0..needed as usize - 1]).to_vec(),
+                        )
+                        .unwrap_or_else(|_| String::from("(unknown)"));
                         self.signed = Some(true);
                         unsafe {
                             CryptMsgClose(h_msg);
@@ -150,12 +143,7 @@ impl CodeSigned {
         if let Some(handle) = f.handle() {
             let mut hash_length: u32 = 0;
             match unsafe {
-                CryptCATAdminCalcHashFromFileHandle(
-                    handle,
-                    &mut hash_length,
-                    null_mut(),
-                    0
-                )
+                CryptCATAdminCalcHashFromFileHandle(handle, &mut hash_length, null_mut(), 0)
             } {
                 0 => warn!("Could not obtain file hash for {}", path.to_string_lossy()),
                 _ => {
@@ -165,34 +153,58 @@ impl CodeSigned {
                         CryptCATAdminCalcHashFromFileHandle(
                             handle,
                             &mut hash_length,
-                            hash_data.as_mut_ptr(),
-                            0
+                            hash_data.as_mut_ptr() as _,
+                            0,
                         );
                     }
 
                     let driver_action = Guid::driver_action_verify();
-                    let mut admin_context: *mut u8 = null_mut();
-                    if unsafe { CryptCATAdminAcquireContext(&mut admin_context, &driver_action, 0) } == 0 {
+                    let mut admin_context: *mut c_void = null_mut();
+                    if unsafe { CryptCATAdminAcquireContext(&mut admin_context, &driver_action, 0) }
+                        == 0
+                    {
                         /* error? */
                         return;
                     }
 
-                    let mut cat = unsafe { CryptCATAdminEnumCatalogFromHash(admin_context, hash_data.as_ptr(), hash_length, 0, null_mut()) };
+                    let mut cat = unsafe {
+                        CryptCATAdminEnumCatalogFromHash(
+                            admin_context,
+                            hash_data.as_ptr() as _,
+                            hash_length,
+                            0,
+                            null_mut(),
+                        )
+                    };
                     loop {
                         let mut cat_info = CatalogInfo::default();
-                        if 0 == unsafe { CryptCATCatalogInfoFromContext(cat, &mut cat_info, 0) } {
+                        if 0 == unsafe {
+                            CryptCATCatalogInfoFromContext(cat as _, &mut cat_info, 0)
+                        } {
                             /* out of catalogs */
                             break;
                         }
-                        let cat_path = unsafe { WideCString::from_ptr_str(&cat_info.catalog_file as *const u16) };
+                        let cat_path = unsafe {
+                            WideCString::from_ptr_str(&cat_info.catalog_file as *const u16)
+                        };
                         self.catalog = true;
                         self.embedded(&cat_path);
-                        cat = unsafe { CryptCATAdminEnumCatalogFromHash(admin_context, hash_data.as_ptr(), hash_length, 0, &mut cat) };
-                        if cat == null_mut() { break; }
+                        cat = unsafe {
+                            CryptCATAdminEnumCatalogFromHash(
+                                admin_context,
+                                hash_data.as_ptr() as _,
+                                hash_length,
+                                0,
+                                &mut cat as *mut _ as *mut _,
+                            )
+                        };
+                        if cat.is_null() {
+                            break;
+                        }
                     }
 
                     unsafe {
-                        CryptCATAdminReleaseCatalogContext(admin_context, cat, 0);
+                        CryptCATAdminReleaseCatalogContext(admin_context as _, cat, 0);
                         CryptCATAdminReleaseContext(admin_context, 0);
                     }
                 }
