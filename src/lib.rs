@@ -1,4 +1,13 @@
+//! Interface for windows binary signing via Crypt32 APIs. Cryptographic signing
+//! of executables helps ensure files are released by who they claim to be released
+//! by, as well as verify they have not been tampered with between release and execution.
+//!
+//! More information is available from Microsoft
+//! [here](https://docs.microsoft.com/en-us/windows/win32/seccrypto/cryptography-tools)
+//!
+
 #![cfg(target_os = "windows")]
+#![warn(missing_docs)]
 
 mod api;
 mod error;
@@ -57,22 +66,28 @@ pub struct CodeSigned {
 }
 
 impl CodeSigned {
+    /// Attempt to verify the signature status of a file at `path`.
     pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        let mut this = Self::default();
+        this.path = path.as_ref().to_path_buf();
+
         let path = path.as_ref().to_str().ok_or(Error::Generic)?;
         let path = U16CString::from_str(path).map_err(|_| Error::Generic)?;
 
-        let mut this = Self::default();
         let mut file_info = WinTrustFileInfo::from_path(&path);
+
         let mut win_trust_data = WinTrustData::default();
         win_trust_data.data = &mut file_info;
 
         let action = Guid::wintrust_action_generic_verify_v2();
+
         match unsafe { WinVerifyTrust(null(), &action, &win_trust_data) } {
             0 => this.embedded(&path)?,
             _ => this.catalog(&path)?,
         }
 
         win_trust_data.state_action = WTD_STATEACTION_CLOSE;
+
         unsafe {
             WinVerifyTrust(null(), &action, &win_trust_data);
         }
@@ -181,77 +196,81 @@ impl CodeSigned {
     }
 
     fn catalog(&mut self, path: &U16CString) -> Result<()> {
+        let mut result = Ok(());
+
         let f = FileHandle::new().with_file(&path)?;
+
         if let Some(handle) = f.handle() {
             let mut hash_length: u32 = 0;
-            match unsafe {
+
+            if unsafe {
                 CryptCATAdminCalcHashFromFileHandle(handle, &mut hash_length, null_mut(), 0)
-            } {
-                0 => println!("Could not obtain file hash for {}", path.to_string_lossy()),
-                _ => {
-                    self.signature_type = SignatureType::Catalog;
-                    let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
-                    unsafe {
-                        CryptCATAdminCalcHashFromFileHandle(
-                            handle,
-                            &mut hash_length,
-                            hash_data.as_mut_ptr() as _,
-                            0,
-                        );
-                    }
+            } == 0
+            {
+                println!("Could not obtain file hash for {}", path.to_string_lossy());
+                return Err(Error::Generic);
+            }
 
-                    let driver_action = Guid::driver_action_verify();
-                    let mut admin_context: *mut c_void = null_mut();
-                    if unsafe { CryptCATAdminAcquireContext(&mut admin_context, &driver_action, 0) }
-                        == 0
-                    {
-                        /* error? */
-                        return Err(Error::Generic);
-                    }
+            self.signature_type = SignatureType::Catalog;
+            let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
+            unsafe {
+                CryptCATAdminCalcHashFromFileHandle(
+                    handle,
+                    &mut hash_length,
+                    hash_data.as_mut_ptr() as _,
+                    0,
+                );
+            }
 
-                    let mut cat = unsafe {
-                        CryptCATAdminEnumCatalogFromHash(
-                            admin_context,
-                            hash_data.as_ptr() as _,
-                            hash_length,
-                            0,
-                            null_mut(),
-                        )
-                    };
+            let driver_action = Guid::driver_action_verify();
+            let mut admin_context: *mut c_void = null_mut();
+            if unsafe { CryptCATAdminAcquireContext(&mut admin_context, &driver_action, 0) } == 0 {
+                return Err(Error::Generic);
+            }
 
-                    loop {
-                        let mut cat_info = CatalogInfo::default();
-                        if 0 == unsafe {
-                            CryptCATCatalogInfoFromContext(cat as _, &mut cat_info, 0)
-                        } {
-                            return Err(Error::ExhaustedCatalogs);
-                        }
-                        let cat_path = unsafe {
-                            U16CString::from_ptr_str(&cat_info.catalog_file as *const u16)
-                        };
-                        self.signature_type = SignatureType::Catalog;
-                        self.embedded(&cat_path)?;
-                        cat = unsafe {
-                            CryptCATAdminEnumCatalogFromHash(
-                                admin_context,
-                                hash_data.as_ptr() as _,
-                                hash_length,
-                                0,
-                                &mut cat as *mut _ as *mut _,
-                            )
-                        };
-                        if cat.is_null() {
-                            break;
-                        }
-                    }
+            let mut cat = unsafe {
+                CryptCATAdminEnumCatalogFromHash(
+                    admin_context,
+                    hash_data.as_ptr() as _,
+                    hash_length,
+                    0,
+                    null_mut(),
+                )
+            };
 
-                    unsafe {
-                        CryptCATAdminReleaseCatalogContext(admin_context, cat, 0);
-                        CryptCATAdminReleaseContext(admin_context, 0);
-                    }
+            loop {
+                let mut cat_info = CatalogInfo::default();
+                if 0 == unsafe { CryptCATCatalogInfoFromContext(cat as _, &mut cat_info, 0) } {
+                    result = Err(Error::ExhaustedCatalogs);
+                    break;
+                }
+                let cat_path =
+                    unsafe { U16CString::from_ptr_str(&cat_info.catalog_file as *const u16) };
+                self.signature_type = SignatureType::Catalog;
+                self.embedded(&cat_path)?;
+
+                cat = unsafe {
+                    CryptCATAdminEnumCatalogFromHash(
+                        admin_context,
+                        hash_data.as_ptr() as _,
+                        hash_length,
+                        0,
+                        &mut cat as *mut _ as *mut _,
+                    )
+                };
+
+                if cat.is_null() {
+                    result = Err(Error::ExhaustedCatalogs);
+                    break;
                 }
             }
+
+            unsafe {
+                CryptCATAdminReleaseCatalogContext(admin_context, cat, 0);
+                CryptCATAdminReleaseContext(admin_context, 0);
+            }
         }
-        Ok(())
+
+        result
     }
 }

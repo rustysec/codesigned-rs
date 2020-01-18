@@ -1,15 +1,14 @@
 extern crate codesigned;
 
-use std::env::args;
 use codesigned::CodeSigned;
+use std::env::args;
 
 fn main() {
-    //let path = args().nth(1).unwrap_or("C:\\program files\\nightly\\firefox.exe".to_owned());
-    //let path = args().nth(1).unwrap_or("C:\\windows\\system32\\notepad.exe".to_owned());
-    let path = args().nth(1).unwrap_or("C:\\windows\\system32\\kernel32.dll".to_owned());
-    println!("checking: {}", path);
-    let mut cs = CodeSigned::default();
-    cs.file(&path);
+    let path = args()
+        .nth(1)
+        .expect("Provide the path to a file for signature check");
 
+    println!("checking: {}", path);
+    let mut cs = CodeSigned::new(path).expect("An error occured while verifying signature");
     println!("{:?}", cs);
 }
