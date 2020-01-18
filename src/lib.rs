@@ -1,47 +1,91 @@
+#![cfg(target_os = "windows")]
+
 #[macro_use]
 extern crate log;
 
 mod api;
+mod error;
 
 use api::*;
 use std::ptr::{null, null_mut, read};
-use widestring::WideCString;
+use widestring::U16CString;
 use winapi::ctypes::c_void;
 
+/// Result of code signing operations
+type Result<T> = std::result::Result<T, error::Error>;
+
+/// Type of signature found
+#[derive(Clone, Debug, PartialEq)]
+pub enum SignatureType {
+    /// Not signed
+    NotSigned,
+
+    /// File has an embedded signature
+    Embedded,
+
+    /// Signature was found in a certificate catalog
+    Catalog,
+}
+
+impl Default for SignatureType {
+    fn default() -> Self {
+        Self::NotSigned
+    }
+}
+
+/// Information about the code signature.
 #[derive(Clone, Default, Debug)]
 pub struct CodeSigned {
-    pub path: String,
-    pub signed: Option<bool>,
-    pub catalog: bool,
-    pub issuer_name: String,
-    pub subject_name: String,
-    pub timestamp_issuer_name: String,
-    pub timestamp_subject_name: String,
-    pub serial_number: String,
+    /// Path of the file accesses
+    pub path: std::path::PathBuf,
+
+    /// The type of signature found
+    pub signature_type: SignatureType,
+
+    /// The name of the certificate issuer
+    pub issuer_name: Option<String>,
+
+    /// The name of the owner of the file
+    pub subject_name: Option<String>,
+
+    /// The name of the timestamp issuer
+    pub timestamp_issuer_name: Option<String>,
+
+    /// The name of the subject receiving the timestamp
+    pub timestamp_subject_name: Option<String>,
+
+    /// The certificate serial number
+    pub serial_number: Option<String>,
 }
 
 impl CodeSigned {
-    pub fn file(&mut self, path: &str) {
-        self.path = path.to_owned();
-        if let Ok(path) = WideCString::from_str(path) {
-            let mut file_info = WinTrustFileInfo::from_path(&path);
-            let mut win_trust_data = WinTrustData::default();
-            win_trust_data.data = &mut file_info;
+    pub fn open<P: AsRef<std::path::Path>>(&mut self, path: P) {
+        path.as_ref().to_str().and_then(|path_str| {
+            U16CString::from_str(path_str).ok().map(|path| {
+                let mut file_info = WinTrustFileInfo::from_path(&path);
+                let mut win_trust_data = WinTrustData::default();
+                win_trust_data.data = &mut file_info;
 
-            let action = Guid::wintrust_action_generic_verify_v2();
-            match unsafe { WinVerifyTrust(null(), &action, &win_trust_data) } {
-                0 => self.embedded(&path),
-                _ => self.catalog(&path),
-            }
+                let action = Guid::wintrust_action_generic_verify_v2();
+                match unsafe { WinVerifyTrust(null(), &action, &win_trust_data) } {
+                    0 => self.embedded(&path),
+                    _ => self.catalog(&path),
+                }
 
-            win_trust_data.state_action = WTD_STATEACTION_CLOSE;
-            unsafe {
-                WinVerifyTrust(null(), &action, &win_trust_data);
-            }
-        }
+                win_trust_data.state_action = WTD_STATEACTION_CLOSE;
+                unsafe {
+                    WinVerifyTrust(null(), &action, &win_trust_data);
+                }
+            })
+        });
     }
 
-    fn embedded(&mut self, path: &WideCString) {
+    /// Determines if the file is signed
+    pub fn signed(&self) -> bool {
+        self.signature_type != SignatureType::NotSigned
+    }
+
+    fn embedded(&mut self, path: &U16CString) {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
@@ -121,13 +165,14 @@ impl CodeSigned {
                             );
                         }
 
-                        self.serial_number = msg.serial_number.to_string();
-                        self.issuer_name = msg.issuer.to_string();
+                        self.serial_number = Some(msg.serial_number.to_string());
+                        self.issuer_name = Some(msg.issuer.to_string());
                         self.subject_name = String::from_utf8(
                             (&subject_name_data[0..needed as usize - 1]).to_vec(),
                         )
-                        .unwrap_or_else(|_| String::from("(unknown)"));
-                        self.signed = Some(true);
+                        .ok();
+                        self.signature_type = SignatureType::Embedded;
+
                         unsafe {
                             CryptMsgClose(h_msg);
                             CertCloseStore(h_store, 2);
@@ -138,7 +183,7 @@ impl CodeSigned {
         }
     }
 
-    fn catalog(&mut self, path: &WideCString) {
+    fn catalog(&mut self, path: &U16CString) {
         let f = FileHandle::new().with_file(&path);
         if let Some(handle) = f.handle() {
             let mut hash_length: u32 = 0;
@@ -147,7 +192,7 @@ impl CodeSigned {
             } {
                 0 => warn!("Could not obtain file hash for {}", path.to_string_lossy()),
                 _ => {
-                    self.signed = Some(false);
+                    self.signature_type = SignatureType::Catalog;
                     let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
                     unsafe {
                         CryptCATAdminCalcHashFromFileHandle(
@@ -185,9 +230,9 @@ impl CodeSigned {
                             break;
                         }
                         let cat_path = unsafe {
-                            WideCString::from_ptr_str(&cat_info.catalog_file as *const u16)
+                            U16CString::from_ptr_str(&cat_info.catalog_file as *const u16)
                         };
-                        self.catalog = true;
+                        self.signature_type = SignatureType::Catalog;
                         self.embedded(&cat_path);
                         cat = unsafe {
                             CryptCATAdminEnumCatalogFromHash(
