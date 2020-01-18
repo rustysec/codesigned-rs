@@ -1,10 +1,9 @@
 mod constants;
 mod oids;
 
-extern crate widestring;
-
 pub use self::constants::*;
 pub use self::oids::*;
+use crate::{Error, Result};
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
@@ -266,7 +265,7 @@ impl FileHandle {
         self.handle
     }
 
-    pub fn open_file(&mut self, path: &WideCString) {
+    pub fn open_file(&mut self, path: &WideCString) -> Result<()> {
         match unsafe {
             CreateFileW(
                 path.as_ptr(),
@@ -278,19 +277,20 @@ impl FileHandle {
                 null(),
             )
         } {
-            i if i as usize == 0 => println!("nope!"),
+            i if i as usize == 0 => Err(Error::OpenFileFailed),
             f => {
                 self.handle = Some(f);
                 if let Ok(p) = path.to_string() {
                     self.path = Some(p)
                 }
+                Ok(())
             }
         }
     }
 
-    pub fn with_file(mut self, path: &WideCString) -> Self {
-        self.open_file(&path);
-        self
+    pub fn with_file(mut self, path: &WideCString) -> Result<Self> {
+        self.open_file(&path)?;
+        Ok(self)
     }
 }
 
@@ -437,7 +437,7 @@ extern "system" {
         crypt_msg: *const c_void,
         param_type: DWORD,
         index: DWORD,
-        data: *mut u8,
+        data: *mut c_void,
         data_len: *mut DWORD,
     ) -> DWORD;
 
@@ -468,9 +468,13 @@ extern "system" {
         hash_lenght: DWORD,
         flags: DWORD,
         prev_cat_info: *mut *mut c_void,
-    ) -> *mut u8;
+    ) -> *mut c_void;
 
-    pub fn CryptCATAdminReleaseCatalogContext(admin: *mut u8, info: *mut u8, flags: DWORD) -> u32;
+    pub fn CryptCATAdminReleaseCatalogContext(
+        admin: *mut c_void,
+        info: *mut c_void,
+        flags: DWORD,
+    ) -> u32;
 
     pub fn CryptCATCatalogInfoFromContext(
         info_context: *const c_void,

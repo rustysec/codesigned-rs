@@ -5,7 +5,6 @@ authors = ["russ <rustysec@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-log = "0.4"
 thiserror = "1"
 widestring = "0.4"
 winapi = { version = "0.3", features = [ "minwindef" ] }
