@@ -417,6 +417,133 @@ impl Drop for CertStoreContext {
     }
 }
 
+/// Wrapper for CryptMsg
+pub struct CryptMsg(*mut c_void);
+
+impl CryptMsg {
+    /// Construct a new CryptMsg wrapper
+    pub fn new() -> Self {
+        Self(null_mut())
+    }
+
+    /// Get a reference to the inner pointer
+    pub fn raw_ptr(&mut self) -> *mut c_void {
+        self.0
+    }
+}
+
+impl Drop for CryptMsg {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CryptMsgClose(self.0);
+            }
+        }
+    }
+}
+
+/// Wrapper for CertStore
+pub struct CertStore(*mut c_void);
+
+impl CertStore {
+    /// Construct a new CertStore wrapper
+    pub fn new() -> Self {
+        Self(null_mut())
+    }
+
+    /// Get a reference to the inner pointer
+    pub fn raw_ptr(&mut self) -> *mut c_void {
+        self.0
+    }
+}
+
+impl Drop for CertStore {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CertCloseStore(self.0, 2);
+            }
+        }
+    }
+}
+
+/// Wrapper for AdminContext
+pub struct AdminContext(*mut c_void);
+
+impl AdminContext {
+    /// Construct a new AdminContext wrapper
+    pub fn new() -> Self {
+        Self(null_mut())
+    }
+
+    /// Get a reference to the inner pointer
+    pub fn ptr(&self) -> *const c_void {
+        self.0 as _
+    }
+
+    /// Get a reference to the inner pointer
+    pub fn mut_ptr(&mut self) -> *mut c_void {
+        self.0
+    }
+}
+
+impl Drop for AdminContext {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CryptCATAdminReleaseContext(self.0, 0);
+            }
+        }
+    }
+}
+
+/// Warpper around AdminCatalog
+pub struct AdminCatalog<'ctx> {
+    catalog: *mut c_void,
+    admin_context: &'ctx AdminContext,
+}
+
+impl<'ctx> AdminCatalog<'ctx> {
+    pub fn new(
+        admin_context: &'ctx AdminContext,
+        hash_data: *const u8,
+        hash_length: DWORD,
+    ) -> Self {
+        Self {
+            catalog: unsafe {
+                CryptCATAdminEnumCatalogFromHash(
+                    admin_context.ptr(),
+                    hash_data as _,
+                    hash_length,
+                    0,
+                    null_mut(),
+                )
+            },
+            admin_context,
+        }
+    }
+
+    pub fn ptr(&self) -> *const c_void {
+        self.catalog as _
+    }
+
+    pub fn mut_ptr(&mut self) -> *mut c_void {
+        self.catalog
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.catalog.is_null()
+    }
+}
+
+impl<'ctx> Drop for AdminCatalog<'ctx> {
+    fn drop(&mut self) {
+        unsafe {
+            CryptCATAdminReleaseCatalogContext(self.admin_context.ptr(), self.catalog, 0);
+        }
+    }
+}
+
 #[link(name = "crypt32")]
 extern "system" {
     pub fn CryptQueryObject(
@@ -471,7 +598,7 @@ extern "system" {
     ) -> *mut c_void;
 
     pub fn CryptCATAdminReleaseCatalogContext(
-        admin: *mut c_void,
+        admin: *const c_void,
         info: *mut c_void,
         flags: DWORD,
     ) -> u32;
