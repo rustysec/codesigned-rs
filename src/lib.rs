@@ -5,6 +5,12 @@
 //! More information is available from Microsoft
 //! [here](https://docs.microsoft.com/en-us/windows/win32/seccrypto/cryptography-tools)
 //!
+//!
+//! ```no_run
+//! use codesigned::CodeSigned;
+//! let signature = CodeSigned::new(r"c:\windows\system32\notepad.exe")?;
+//! ```
+//!
 
 #![cfg(target_os = "windows")]
 #![warn(missing_docs)]
