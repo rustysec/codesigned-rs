@@ -1,5 +1,3 @@
-extern crate codesigned;
-
 use codesigned::CodeSigned;
 use std::env::args;
 
@@ -9,6 +7,6 @@ fn main() {
         .expect("Provide the path to a file for signature check");
 
     println!("checking: {}", path);
-    let mut cs = CodeSigned::new(path).expect("An error occured while verifying signature");
-    println!("{:?}", cs);
+    let cs = CodeSigned::new(path).expect("An error occurred while verifying signature");
+    println!("{:#?}", cs);
 }

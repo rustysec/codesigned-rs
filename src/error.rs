@@ -13,4 +13,16 @@ pub enum Error {
     /// Opening the file failed
     #[error("Failed to open file")]
     OpenFileFailed,
+
+    /// Could not hash the target file
+    #[error("Could not obtain file hash for {0}")]
+    UnableToHash(String),
+
+    /// Unable to convert a wide string
+    #[error("Could not convert string: {0}")]
+    WideStringConversion(#[source] widestring::MissingNulError<u16>),
+
+    /// Unable to get certificate store context
+    #[error("Unable to obtain certificate store context")]
+    AdminContext,
 }

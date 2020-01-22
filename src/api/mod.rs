@@ -4,6 +4,9 @@ mod oids;
 pub use self::constants::*;
 pub use self::oids::*;
 use crate::{Error, Result};
+use cellophane::{
+    CryptCATAdminReleaseCatalogContextWrapper, CryptCATAdminReleaseContextWrapper, HasPointer,
+};
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
 use std::slice::from_raw_parts_mut;
@@ -56,7 +59,7 @@ impl Default for CryptoAlgorithmIdentifier {
 #[derive(Clone, Debug)]
 pub struct CryptoApiBlob {
     pub len: u32,
-    pub data: *mut c_void,
+    pub data: *mut u8,
 }
 
 impl CryptoApiBlob {
@@ -417,130 +420,39 @@ impl Drop for CertStoreContext {
     }
 }
 
-/// Wrapper for CryptMsg
-pub struct CryptMsg(*mut c_void);
-
-impl CryptMsg {
-    /// Construct a new CryptMsg wrapper
-    pub fn new() -> Self {
-        Self(null_mut())
-    }
-
-    /// Get a reference to the inner pointer
-    pub fn raw_ptr(&mut self) -> *mut c_void {
-        self.0
-    }
-}
-
-impl Drop for CryptMsg {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                CryptMsgClose(self.0);
-            }
-        }
-    }
-}
-
-/// Wrapper for CertStore
-pub struct CertStore(*mut c_void);
-
-impl CertStore {
-    /// Construct a new CertStore wrapper
-    pub fn new() -> Self {
-        Self(null_mut())
-    }
-
-    /// Get a reference to the inner pointer
-    pub fn raw_ptr(&mut self) -> *mut c_void {
-        self.0
-    }
-}
-
-impl Drop for CertStore {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                CertCloseStore(self.0, 2);
-            }
-        }
-    }
-}
-
-/// Wrapper for AdminContext
-pub struct AdminContext(*mut c_void);
-
-impl AdminContext {
-    /// Construct a new AdminContext wrapper
-    pub fn new() -> Self {
-        Self(null_mut())
-    }
-
-    /// Get a reference to the inner pointer
-    pub fn ptr(&self) -> *const c_void {
-        self.0 as _
-    }
-
-    /// Get a reference to the inner pointer
-    pub fn mut_ptr(&mut self) -> *mut c_void {
-        self.0
-    }
-}
-
-impl Drop for AdminContext {
-    fn drop(&mut self) {
-        if !self.0.is_null() {
-            unsafe {
-                CryptCATAdminReleaseContext(self.0, 0);
-            }
-        }
-    }
-}
-
 /// Warpper around AdminCatalog
-pub struct AdminCatalog<'ctx> {
-    catalog: *mut c_void,
-    admin_context: &'ctx AdminContext,
+pub(crate) struct AdminCatalog<'ctx> {
+    catalog: CryptCATAdminReleaseCatalogContextWrapper<'ctx>,
 }
 
 impl<'ctx> AdminCatalog<'ctx> {
     pub fn new(
-        admin_context: &'ctx AdminContext,
+        admin_context: &'ctx CryptCATAdminReleaseContextWrapper,
         hash_data: *const u8,
         hash_length: DWORD,
     ) -> Self {
         Self {
-            catalog: unsafe {
-                CryptCATAdminEnumCatalogFromHash(
-                    admin_context.ptr(),
-                    hash_data as _,
-                    hash_length,
-                    0,
-                    null_mut(),
-                )
-            },
-            admin_context,
+            catalog: CryptCATAdminReleaseCatalogContextWrapper::new(
+                unsafe {
+                    CryptCATAdminEnumCatalogFromHash(
+                        admin_context.ptr(),
+                        hash_data as _,
+                        hash_length,
+                        0,
+                        null_mut(),
+                    )
+                },
+                admin_context,
+            ),
         }
     }
 
     pub fn ptr(&self) -> *const c_void {
-        self.catalog as _
-    }
-
-    pub fn mut_ptr(&mut self) -> *mut c_void {
-        self.catalog
+        self.catalog.ptr()
     }
 
     pub fn is_null(&self) -> bool {
-        self.catalog.is_null()
-    }
-}
-
-impl<'ctx> Drop for AdminCatalog<'ctx> {
-    fn drop(&mut self) {
-        unsafe {
-            CryptCATAdminReleaseCatalogContext(self.admin_context.ptr(), self.catalog, 0);
-        }
+        self.catalog.ptr().is_null()
     }
 }
 
@@ -597,19 +509,11 @@ extern "system" {
         prev_cat_info: *mut *mut c_void,
     ) -> *mut c_void;
 
-    pub fn CryptCATAdminReleaseCatalogContext(
-        admin: *const c_void,
-        info: *mut c_void,
-        flags: DWORD,
-    ) -> u32;
-
     pub fn CryptCATCatalogInfoFromContext(
         info_context: *const c_void,
         info: *mut CatalogInfo,
-        flags: DWORD,
-    ) -> DWORD;
-
-    pub fn CryptCATAdminReleaseContext(hCatAdmin: *const c_void, dwFlags: DWORD) -> u32;
+        flags: u32,
+    ) -> u32;
 
     pub fn CertFindCertificateInStore(
         cert_store: *const c_void,
@@ -630,10 +534,6 @@ extern "system" {
     ) -> DWORD;
 
     pub fn CertFreeCertificateContext(context: *const c_void) -> DWORD;
-
-    pub fn CertCloseStore(cert_store: *const c_void, flags: DWORD) -> u32;
-
-    pub fn CryptMsgClose(crypt_msg: *const c_void) -> DWORD;
 }
 
 #[link(name = "wintrust")]

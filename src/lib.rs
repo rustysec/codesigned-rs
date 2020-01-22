@@ -19,6 +19,9 @@ mod api;
 mod error;
 
 use api::*;
+use cellophane::{
+    CertCloseStoreWrapper, CryptCATAdminReleaseContextWrapper, CryptMsgCloseWrapper, HasPointer,
+};
 use error::Error;
 use std::ptr::{null, null_mut};
 use widestring::{U16CStr, U16CString};
@@ -109,8 +112,8 @@ impl CodeSigned {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
-        let mut h_store = CertStore::new();
-        let mut h_msg = CryptMsg::new();
+        let mut h_store = CertCloseStoreWrapper::new();
+        let mut h_msg = CryptMsgCloseWrapper::new();
 
         if unsafe {
             CryptQueryObject(
@@ -122,8 +125,8 @@ impl CodeSigned {
                 &mut encoding,
                 &mut content_type,
                 &mut format_type,
-                &mut h_store.raw_ptr(),
-                &mut h_msg.raw_ptr(),
+                h_store.mut_ref_ptr(),
+                h_msg.mut_ref_ptr(),
                 null_mut(),
             )
         } == 0
@@ -131,15 +134,29 @@ impl CodeSigned {
             return Err(Error::Generic);
         }
 
-        let mut msg_signer_info: MsgSignerInfo = unsafe { std::mem::zeroed() };
         let mut data_len: u32 = 0;
 
+        // get the parameter size
         if unsafe {
             CryptMsgGetParam(
-                h_msg.raw_ptr(),
+                h_msg.ptr(),
                 CMSG_SIGNER_INFO_PARAM,
-                std::mem::size_of::<MsgSignerInfo>() as _,
-                &mut msg_signer_info as *mut _ as _,
+                0,
+                null_mut(),
+                &mut data_len,
+            )
+        } == 0
+        {
+            // do nothing
+        }
+
+        let mut msg_signer_info_data = vec![0u8; data_len as usize];
+        if unsafe {
+            CryptMsgGetParam(
+                h_msg.ptr(),
+                CMSG_SIGNER_INFO_PARAM,
+                0,
+                msg_signer_info_data.as_mut_ptr() as _,
                 &mut data_len,
             )
         } == 0
@@ -147,13 +164,16 @@ impl CodeSigned {
             return Err(Error::Generic);
         }
 
+        let msg_signer_info: MsgSignerInfo =
+            unsafe { std::ptr::read(msg_signer_info_data.as_ptr() as *const _ as _) };
+
         let mut cert_info = CertInfo::default();
         cert_info.serial_number.from(&msg_signer_info.serial_number);
         cert_info.issuer.from(&msg_signer_info.issuer);
 
         let context = CertStoreContext::new(unsafe {
             CertFindCertificateInStore(
-                h_store.raw_ptr(),
+                h_store.ptr(),
                 ENCODING,
                 0,
                 CERT_FIND_SUBJECT_CERT,
@@ -201,8 +221,6 @@ impl CodeSigned {
     }
 
     fn catalog(&mut self, path: &U16CString) -> Result<()> {
-        let mut result = Ok(());
-
         let f = FileHandle::new().with_file(&path)?;
 
         if let Some(handle) = f.handle() {
@@ -212,8 +230,7 @@ impl CodeSigned {
                 CryptCATAdminCalcHashFromFileHandle(handle, &mut hash_length, null_mut(), 0)
             } == 0
             {
-                println!("Could not obtain file hash for {}", path.to_string_lossy());
-                return Err(Error::Generic);
+                return Err(Error::UnableToHash(path.to_string_lossy()));
             }
 
             self.signature_type = SignatureType::Catalog;
@@ -228,37 +245,34 @@ impl CodeSigned {
             }
 
             let driver_action = Guid::driver_action_verify();
-            let mut admin_context = AdminContext::new();
+            let mut admin_context = CryptCATAdminReleaseContextWrapper::new();
             if unsafe {
-                CryptCATAdminAcquireContext(&mut admin_context.mut_ptr(), &driver_action, 0)
+                CryptCATAdminAcquireContext(admin_context.mut_ref_ptr(), &driver_action, 0)
             } == 0
             {
-                return Err(Error::Generic);
+                return Err(Error::AdminContext);
             }
 
             loop {
                 let cat = AdminCatalog::new(&admin_context, hash_data.as_ptr(), hash_length);
 
                 if cat.is_null() {
-                    result = Err(Error::ExhaustedCatalogs);
-                    break;
+                    return Err(Error::ExhaustedCatalogs);
                 }
 
                 let mut cat_info = CatalogInfo::default();
                 if 0 == unsafe { CryptCATCatalogInfoFromContext(cat.ptr(), &mut cat_info, 0) } {
-                    result = Err(Error::ExhaustedCatalogs);
-                    break;
+                    return Err(Error::ExhaustedCatalogs);
                 }
 
                 let cat_path = U16CStr::from_slice_with_nul(&cat_info.catalog_file)
-                    .map_err(|_| Error::ExhaustedCatalogs)?
+                    .map_err(Error::WideStringConversion)?
                     .to_ucstring();
 
                 self.signature_type = SignatureType::Catalog;
                 self.embedded(&cat_path)?;
             }
         }
-
-        result
+        Ok(())
     }
 }

@@ -5,6 +5,7 @@ authors = ["russ <rustysec@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+cellophane = { git = "https://github.com/rustysec/cellophane-rs" }
 thiserror = "1"
 widestring = "0.4"
-winapi = { version = "0.3", features = [ "minwindef" ] }
+winapi = { version = "0.3", features = [ "errhandlingapi", "minwindef" ] }
