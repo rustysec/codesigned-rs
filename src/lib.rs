@@ -8,7 +8,7 @@
 //!
 //! ```no_run
 //! use codesigned::CodeSigned;
-//! let signature = CodeSigned::new(r"c:\windows\system32\notepad.exe")?;
+//! let signature = CodeSigned::new(r"c:\windows\system32\notepad.exe").unwrap();
 //! ```
 //!
 
