@@ -188,8 +188,13 @@ impl CodeSigned {
 
         self.serial_number = Some(msg_signer_info.serial_number.to_string());
         self.issuer_name = Some(msg_signer_info.issuer.to_string());
-        self.subject_name =
-            String::from_utf8((&subject_name_data[0..needed as usize - 1]).to_vec()).ok();
+        self.subject_name = String::from_utf8(
+            subject_name_data
+                .into_iter()
+                .take(needed as usize - 1)
+                .collect::<Vec<u8>>(),
+        )
+        .ok();
         self.signature_type = SignatureType::Embedded;
 
         Ok(())
