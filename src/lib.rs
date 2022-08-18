@@ -125,8 +125,8 @@ impl CodeSigned {
                 &mut encoding,
                 &mut content_type,
                 &mut format_type,
-                h_store.mut_ref_ptr(),
-                h_msg.mut_ref_ptr(),
+                h_store.mut_ref(),
+                h_msg.mut_ref(),
                 null_mut(),
             )
         } == 0
@@ -246,9 +246,8 @@ impl CodeSigned {
 
             let driver_action = Guid::driver_action_verify();
             let mut admin_context = CryptCATAdminReleaseContextWrapper::new();
-            if unsafe {
-                CryptCATAdminAcquireContext(admin_context.mut_ref_ptr(), &driver_action, 0)
-            } == 0
+            if unsafe { CryptCATAdminAcquireContext(admin_context.mut_ref(), &driver_action, 0) }
+                == 0
             {
                 return Err(Error::AdminContext);
             }
