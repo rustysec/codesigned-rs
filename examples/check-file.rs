@@ -6,7 +6,10 @@ fn main() {
         .nth(1)
         .expect("Provide the path to a file for signature check");
 
-    println!("checking: {}", path);
-    let cs = CodeSigned::new(path).expect("An error occurred while verifying signature");
-    println!("{:#?}", cs);
+    println!("Checking Signature of {}", path);
+
+    match CodeSigned::new(path) {
+        Err(err) => println!("An error occurred while verifying signature: {}", err),
+        Ok(cs) => println!("{:#?}", cs),
+    }
 }

@@ -22,6 +22,7 @@ mod error;
 use api::*;
 use error::Error;
 use std::{
+    ffi::c_void,
     mem::{size_of, zeroed},
     path::{Path, PathBuf},
     ptr::{null, null_mut, read},
@@ -32,6 +33,7 @@ use winapi::{
     shared::ntdef::LPCWSTR,
     um::{
         fileapi::{CreateFileW, OPEN_EXISTING},
+        handleapi::CloseHandle,
         wincrypt::{
             CertNameToStrA, CERT_FIND_SUBJECT_CERT, CERT_NAME_SIMPLE_DISPLAY_TYPE,
             CERT_NAME_STR_REVERSE_FLAG, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
@@ -39,7 +41,9 @@ use winapi::{
             CMSG_SIGNER_INFO_PARAM, CRYPTOAPI_BLOB, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
         },
         winnt::{FILE_SHARE_READ, GENERIC_READ},
-        wintrust::{WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_STATEACTION_CLOSE},
+        wintrust::{
+            WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_STATEACTION_CLOSE, WTD_UI_NONE,
+        },
     },
 };
 
@@ -168,13 +172,29 @@ pub struct CodeSigned {
     pub serial_number: Option<String>,
 }
 
-fn wintrust_file_info(path: LPCWSTR) -> WINTRUST_FILE_INFO {
-    WINTRUST_FILE_INFO {
+fn wintrust_file_info(path: LPCWSTR) -> Result<WINTRUST_FILE_INFO> {
+    let file_handle = unsafe {
+        CreateFileW(
+            path,
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            null_mut(),
+            OPEN_EXISTING,
+            0,
+            null_mut(),
+        )
+    };
+
+    if file_handle.is_null() {
+        return Err(Error::OpenFileFailed);
+    }
+
+    Ok(WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as _,
         pcwszFilePath: path,
-        hFile: null_mut(),
+        hFile: file_handle,
         pgKnownSubject: null(),
-    }
+    })
 }
 
 impl CodeSigned {
@@ -186,9 +206,12 @@ impl CodeSigned {
         let path = path.as_ref().to_str().ok_or(Error::Unspecified)?;
         let path = U16CString::from_str(path).map_err(|_| Error::Unspecified)?;
 
-        let mut file_info = wintrust_file_info(path.as_ptr());
+        let mut file_info = wintrust_file_info(path.as_ptr())?;
 
         let mut win_trust_data = WINTRUST_DATA::default();
+        win_trust_data.cbStruct = size_of::<WINTRUST_DATA>() as _;
+        win_trust_data.dwUIChoice = WTD_UI_NONE;
+        win_trust_data.dwUnionChoice = WTD_CHOICE_FILE;
 
         unsafe {
             *(win_trust_data.u.pFile_mut()) = &mut file_info;
@@ -199,7 +222,7 @@ impl CodeSigned {
         match unsafe { WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _) }
         {
             0 => this.embedded(&path)?,
-            _ => this.catalog(&path)?,
+            _err => this.catalog(&path)?,
         }
 
         win_trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -216,9 +239,8 @@ impl CodeSigned {
         self.signature_type != SignatureType::NotSigned
     }
 
+    /// Query for embeded certificate of a file.
     fn embedded(&mut self, path: &U16CString) -> Result<()> {
-        println!("getting embedded signature...");
-
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
@@ -241,6 +263,7 @@ impl CodeSigned {
             )
         } == 0
         {
+            Self::release_embebed_cert(h_store, h_msg);
             return Err(Error::Unspecified);
         }
 
@@ -262,6 +285,7 @@ impl CodeSigned {
             )
         } == 0
         {
+            Self::release_embebed_cert(h_store, h_msg);
             return Err(Error::Unspecified);
         }
 
@@ -318,12 +342,13 @@ impl CodeSigned {
         .ok();
         self.signature_type = SignatureType::Embedded;
 
+        Self::release_embebed_cert(h_store, h_msg);
         Ok(())
     }
 
+    /// Enumerates all the signature catalogs for one containing the hash of the file provided.
+    /// If found the certificate information of the catalog is returned.
     fn catalog(&mut self, path: &U16CString) -> Result<()> {
-        println!("getting catalog signature...");
-
         let file_handle = unsafe {
             CreateFileW(
                 path.as_ptr(),
@@ -360,8 +385,6 @@ impl CodeSigned {
             );
         }
 
-        println!("hash: {:?}", &hash_data[0..hash_length as usize]);
-
         let driver_action = driver_action_verify();
 
         let mut admin_context: HCATADMIN = null_mut();
@@ -369,7 +392,9 @@ impl CodeSigned {
             return Err(Error::AdminContext);
         }
 
-        println!("admin context null? {}", admin_context.is_null());
+        unsafe {
+            CloseHandle(file_handle);
+        }
 
         let mut admin_catalog = unsafe {
             CryptCATAdminEnumCatalogFromHash(
@@ -382,13 +407,11 @@ impl CodeSigned {
         };
 
         loop {
-            println!("loop!!");
-
             let mut cat_info: CATALOG_INFO = unsafe { zeroed() };
             cat_info.cbStruct = size_of::<CATALOG_INFO>() as _;
 
             if 0 == unsafe { CryptCATCatalogInfoFromContext(admin_catalog, &mut cat_info, 0) } {
-                println!("cannot get cat info");
+                Self::release_catalog_enum(admin_context, admin_catalog);
                 return Err(Error::ExhaustedCatalogs);
             }
 
@@ -396,9 +419,8 @@ impl CodeSigned {
                 .map_err(Error::WideStringConversion)?
                 .to_ucstring();
 
-            self.signature_type = SignatureType::Catalog;
-
             self.embedded(&cat_path)?;
+            self.signature_type = SignatureType::Catalog;
 
             admin_catalog = unsafe {
                 CryptCATAdminEnumCatalogFromHash(
@@ -411,8 +433,28 @@ impl CodeSigned {
             };
 
             if admin_catalog.is_null() {
-                println!("admin catalog is finally null");
+                Self::release_catalog_enum(admin_context, admin_catalog);
                 return Ok(());
+            }
+        }
+    }
+
+    fn release_catalog_enum(admin_context: *mut c_void, catalog: *mut c_void) {
+        unsafe {
+            CryptCATAdminReleaseCatalogContext(admin_context, catalog, 0);
+            CryptCATAdminReleaseContext(admin_context, 0);
+        }
+    }
+
+    fn release_embebed_cert(store: *mut c_void, msg: *mut c_void) {
+        if !store.is_null() {
+            unsafe {
+                CertCloseStore(store, 0);
+            }
+        }
+        if !msg.is_null() {
+            unsafe {
+                CryptMsgClose(store);
             }
         }
     }

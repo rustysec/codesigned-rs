@@ -106,7 +106,10 @@ pub struct _CERT_INFO {
 }
 pub type PCERT_INFO = *mut _CERT_INFO;
 pub type HCRYPTMSG = *mut ::std::os::raw::c_void;
-extern "C" {
+extern "system" {
+    pub fn CryptMsgClose(hCryptMsg: HCRYPTMSG) -> WINBOOL;
+}
+extern "system" {
     pub fn CryptMsgGetParam(
         hCryptMsg: HCRYPTMSG,
         dwParamType: DWORD,
@@ -140,7 +143,10 @@ pub struct _CERT_CONTEXT {
 }
 pub type CERT_CONTEXT = _CERT_CONTEXT;
 pub type PCCERT_CONTEXT = *const CERT_CONTEXT;
-extern "C" {
+extern "system" {
+    pub fn CertCloseStore(hCertStore: HCERTSTORE, dwFlags: DWORD) -> WINBOOL;
+}
+extern "system" {
     pub fn CertFindCertificateInStore(
         hCertStore: HCERTSTORE,
         dwCertEncodingType: DWORD,
@@ -150,7 +156,7 @@ extern "C" {
         pPrevCertContext: PCCERT_CONTEXT,
     ) -> PCCERT_CONTEXT;
 }
-extern "C" {
+extern "system" {
     pub fn CertGetNameStringA(
         pCertContext: PCCERT_CONTEXT,
         dwType: DWORD,
@@ -160,7 +166,7 @@ extern "C" {
         cchNameString: DWORD,
     ) -> DWORD;
 }
-extern "C" {
+extern "system" {
     pub fn CryptQueryObject(
         dwObjectType: DWORD,
         pvObject: *const ::std::os::raw::c_void,
@@ -184,14 +190,14 @@ pub struct CATALOG_INFO_ {
     pub wszCatalogFile: [WCHAR; 260usize],
 }
 pub type CATALOG_INFO = CATALOG_INFO_;
-extern "C" {
+extern "system" {
     pub fn CryptCATAdminAcquireContext(
         arg1: *mut HCATADMIN,
         arg2: *const GUID,
         arg3: DWORD,
     ) -> WINBOOL;
 }
-extern "C" {
+extern "system" {
     pub fn CryptCATAdminCalcHashFromFileHandle(
         arg1: HANDLE,
         arg2: *mut DWORD,
@@ -199,7 +205,7 @@ extern "C" {
         arg4: DWORD,
     ) -> WINBOOL;
 }
-extern "C" {
+extern "system" {
     pub fn CryptCATAdminEnumCatalogFromHash(
         arg1: HCATADMIN,
         arg2: *mut BYTE,
@@ -208,13 +214,23 @@ extern "C" {
         arg5: *mut HCATINFO,
     ) -> HCATINFO;
 }
-extern "C" {
+extern "system" {
+    pub fn CryptCATAdminReleaseCatalogContext(
+        arg1: HCATADMIN,
+        arg2: HCATINFO,
+        arg3: DWORD,
+    ) -> WINBOOL;
+}
+extern "system" {
+    pub fn CryptCATAdminReleaseContext(arg1: HCATADMIN, arg2: DWORD) -> WINBOOL;
+}
+extern "system" {
     pub fn CryptCATCatalogInfoFromContext(
         arg1: HCATINFO,
         arg2: *mut CATALOG_INFO,
         arg3: DWORD,
     ) -> WINBOOL;
 }
-extern "C" {
+extern "system" {
     pub fn WinVerifyTrust(hwnd: HWND, pgActionID: *mut GUID, pWVTData: LPVOID) -> LONG;
 }
