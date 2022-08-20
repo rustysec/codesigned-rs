@@ -18,6 +18,7 @@
 #[allow(dead_code, non_camel_case_types, non_snake_case)]
 mod api;
 mod error;
+mod types;
 
 use api::*;
 use error::Error;
@@ -26,52 +27,24 @@ use std::{
     mem::{size_of, zeroed},
     path::{Path, PathBuf},
     ptr::{null, null_mut, read},
-    slice::from_raw_parts_mut,
 };
+use types::*;
 use widestring::{U16CStr, U16CString};
-use winapi::{
-    shared::ntdef::LPCWSTR,
-    um::{
-        fileapi::{CreateFileW, OPEN_EXISTING},
-        handleapi::CloseHandle,
-        wincrypt::{
-            CertNameToStrA, CERT_FIND_SUBJECT_CERT, CERT_NAME_SIMPLE_DISPLAY_TYPE,
-            CERT_NAME_STR_REVERSE_FLAG, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-            CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE, CERT_SIMPLE_NAME_STR,
-            CMSG_SIGNER_INFO_PARAM, CRYPTOAPI_BLOB, PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
-        },
-        winnt::{FILE_SHARE_READ, GENERIC_READ},
-        wintrust::{
-            WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_STATEACTION_CLOSE, WTD_UI_NONE,
-        },
+use winapi::um::{
+    fileapi::{CreateFileW, OPEN_EXISTING},
+    handleapi::CloseHandle,
+    wincrypt::{
+        CERT_FIND_SUBJECT_CERT, CERT_NAME_SIMPLE_DISPLAY_TYPE,
+        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
+        CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM,
     },
+    winnt::{FILE_SHARE_READ, GENERIC_READ},
+    wintrust::{WINTRUST_DATA, WTD_CHOICE_FILE, WTD_STATEACTION_CLOSE, WTD_UI_NONE},
 };
-
-const ENCODING: u32 = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
-
-/// Result of code signing operations
-type Result<T> = std::result::Result<T, Error>;
-
-fn wintrust_action_generic_verify_v2() -> GUID {
-    GUID {
-        Data1: 0xaa_c56b,
-        Data2: 0xcd44,
-        Data3: 0x11d0,
-        Data4: [0x8c, 0xc2, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee],
-    }
-}
-
-fn driver_action_verify() -> GUID {
-    GUID {
-        Data1: 0xf750_e6c3,
-        Data2: 0x38ee,
-        Data3: 0x11d1,
-        Data4: [0x85, 0xe5, 0x00, 0xc0, 0x4f, 0xc2, 0x95, 0xee],
-    }
-}
 
 /// Type of signature found
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub enum SignatureType {
     /// Not signed
     NotSigned,
@@ -89,66 +62,9 @@ impl Default for SignatureType {
     }
 }
 
-trait BlobToString {
-    fn crypt_string(&mut self) -> Option<String>;
-    fn to_string(&mut self) -> Option<String>;
-}
-
-impl BlobToString for _CRYPTOAPI_BLOB {
-    fn to_string(&mut self) -> Option<String> {
-        if self.cbData == 0 {
-            return None;
-        }
-
-        let bytes = unsafe { from_raw_parts_mut(self.pbData, self.cbData as _) };
-        bytes.reverse();
-
-        Some(
-            bytes
-                .into_iter()
-                .map(|byte| format!("{:02X}", byte))
-                .collect::<Vec<_>>()
-                .join(""),
-        )
-    }
-
-    fn crypt_string(&mut self) -> Option<String> {
-        let mut blob = CRYPTOAPI_BLOB {
-            cbData: self.cbData,
-            pbData: self.pbData,
-        };
-
-        let length = unsafe {
-            CertNameToStrA(
-                X509_ASN_ENCODING,
-                &mut blob,
-                CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG,
-                null_mut(),
-                0,
-            )
-        };
-
-        if length == 0 {
-            return None;
-        }
-
-        let mut data: Vec<u8> = vec![0; length as usize];
-        unsafe {
-            CertNameToStrA(
-                X509_ASN_ENCODING,
-                &mut blob,
-                CERT_SIMPLE_NAME_STR | CERT_NAME_STR_REVERSE_FLAG,
-                data.as_mut_ptr() as _,
-                blob.cbData,
-            );
-        }
-
-        String::from_utf8(data[0..data.len() - 1].to_vec()).ok()
-    }
-}
-
 /// Information about the code signature.
 #[derive(Clone, Default, Debug)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub struct CodeSigned {
     /// Path of the file accesses
     pub path: PathBuf,
@@ -170,31 +86,6 @@ pub struct CodeSigned {
 
     /// The certificate serial number
     pub serial_number: Option<String>,
-}
-
-fn wintrust_file_info(path: LPCWSTR) -> Result<WINTRUST_FILE_INFO> {
-    let file_handle = unsafe {
-        CreateFileW(
-            path,
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            null_mut(),
-            OPEN_EXISTING,
-            0,
-            null_mut(),
-        )
-    };
-
-    if file_handle.is_null() {
-        return Err(Error::OpenFileFailed);
-    }
-
-    Ok(WINTRUST_FILE_INFO {
-        cbStruct: size_of::<WINTRUST_FILE_INFO>() as _,
-        pcwszFilePath: path,
-        hFile: file_handle,
-        pgKnownSubject: null(),
-    })
 }
 
 impl CodeSigned {
