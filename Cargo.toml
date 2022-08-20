@@ -5,7 +5,14 @@ authors = ["russ <rustysec@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+winapi = { version = "0.3", features = [ "impl-default", "errhandlingapi", "fileapi", "minwindef", "wintrust" ] }
 cellophane = { git = "https://github.com/rustysec/cellophane-rs" }
 thiserror = "1"
 widestring = "0.4"
-winapi = { version = "0.3", features = [ "errhandlingapi", "minwindef" ] }
+
+[build-dependencies]
+cc = "1"
+bindgen = { version = "0.58", optional = true }
+
+[features]
+with-bindgen = [ "bindgen" ]

@@ -3,8 +3,8 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum Error {
     /// A generic error occurred while processing code signature")]
-    #[error("Code signing error happened")]
-    Generic,
+    #[error("Code signing error happened: {0}")]
+    Generic(&'static str),
 
     /// Searched in all available catalog files and the requested hash was not found
     #[error("Exhausted catalog search")]
@@ -25,4 +25,8 @@ pub enum Error {
     /// Unable to get certificate store context
     #[error("Unable to obtain certificate store context")]
     AdminContext,
+
+    /// Unspecified error has occured
+    #[error("An unspecified error has occured")]
+    Unspecified,
 }
