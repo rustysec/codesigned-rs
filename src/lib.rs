@@ -4,6 +4,7 @@
 //!
 //! More information is available from Microsoft
 //! [here](https://docs.microsoft.com/en-us/windows/win32/seccrypto/cryptography-tools)
+//! and [here](https://docs.microsoft.com/en-us/windows/win32/api/wintrust/nf-wintrust-winverifytrust)
 //!
 //!
 //! ```no_run
