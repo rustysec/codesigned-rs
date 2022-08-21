@@ -24,10 +24,11 @@ mod types;
 use api::*;
 use error::Error;
 use std::{
-    ffi::c_void,
+    ffi::{c_void, CStr},
     mem::{size_of, zeroed},
     path::{Path, PathBuf},
     ptr::{null, null_mut, read},
+    slice::from_raw_parts_mut,
 };
 use types::*;
 use widestring::{U16CStr, U16CString};
@@ -35,9 +36,10 @@ use winapi::um::{
     fileapi::{CreateFileW, OPEN_EXISTING},
     handleapi::CloseHandle,
     wincrypt::{
-        CERT_FIND_SUBJECT_CERT, CERT_NAME_SIMPLE_DISPLAY_TYPE,
-        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
-        CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM,
+        szOID_RSA_counterSign, CryptDecodeObject, CERT_FIND_SUBJECT_CERT,
+        CERT_NAME_SIMPLE_DISPLAY_TYPE, CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+        CERT_QUERY_FORMAT_FLAG_BINARY, CERT_QUERY_OBJECT_FILE, CMSG_SIGNER_INFO_PARAM,
+        PKCS7_SIGNER_INFO,
     },
     winnt::{FILE_SHARE_READ, GENERIC_READ},
     wintrust::{WINTRUST_DATA, WTD_CHOICE_FILE, WTD_STATEACTION_CLOSE, WTD_UI_NONE},
@@ -63,6 +65,13 @@ impl Default for SignatureType {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CertData {
+    pub serial_number: Option<String>,
+    pub issuer_name: Option<String>,
+    pub subject_name: Option<String>,
+}
+
 /// Information about the code signature.
 #[derive(Clone, Default, Debug)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
@@ -79,14 +88,20 @@ pub struct CodeSigned {
     /// The name of the owner of the file
     pub subject_name: Option<String>,
 
+    /// The certificate serial number
+    pub serial_number: Option<String>,
+
     /// The name of the timestamp issuer
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     pub timestamp_issuer_name: Option<String>,
 
     /// The name of the subject receiving the timestamp
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
     pub timestamp_subject_name: Option<String>,
 
-    /// The certificate serial number
-    pub serial_number: Option<String>,
+    /// The name of the subject receiving the timestamp
+    #[cfg_attr(feature = "serialize", serde(skip_serializing_if = "Option::is_none"))]
+    pub timestamp_serial_number: Option<String>,
 }
 
 impl CodeSigned {
@@ -167,6 +182,7 @@ impl CodeSigned {
         }
 
         let mut msg_signer_info_data = vec![0u8; data_len as usize];
+
         if unsafe {
             CryptMsgGetParam(
                 h_msg,
@@ -184,55 +200,13 @@ impl CodeSigned {
         let mut msg_signer_info: CMSG_SIGNER_INFO =
             unsafe { read(msg_signer_info_data.as_mut_ptr() as _) };
 
-        let mut cert_info: _CERT_INFO = unsafe { zeroed() };
-        cert_info.SerialNumber = msg_signer_info.SerialNumber;
-        cert_info.Issuer = msg_signer_info.Issuer;
-
-        let context = unsafe {
-            CertFindCertificateInStore(
-                h_store,
-                ENCODING,
-                0,
-                CERT_FIND_SUBJECT_CERT,
-                &cert_info as *const _ as _,
-                null(),
-            )
-        };
-
-        let needed: u32 = unsafe {
-            CertGetNameStringA(
-                context,
-                CERT_NAME_SIMPLE_DISPLAY_TYPE,
-                0,
-                null_mut(),
-                null_mut(),
-                0,
-            )
-        };
-
-        let mut subject_name_data: Vec<u8> = vec![0; needed as usize];
-
-        unsafe {
-            CertGetNameStringA(
-                context,
-                CERT_NAME_SIMPLE_DISPLAY_TYPE,
-                0,
-                null_mut(),
-                subject_name_data.as_mut_ptr() as _,
-                needed as u32,
-            );
+        if let Ok(cert_data) = self.cert_data(h_store, &mut msg_signer_info) {
+            self.serial_number = cert_data.serial_number;
+            self.issuer_name = cert_data.issuer_name;
+            self.subject_name = cert_data.subject_name;
         }
 
-        self.serial_number = msg_signer_info.SerialNumber.to_string();
-        self.issuer_name = msg_signer_info.Issuer.crypt_string();
-        self.subject_name = String::from_utf8(
-            subject_name_data
-                .into_iter()
-                .take(needed as usize - 1)
-                .collect::<Vec<u8>>(),
-        )
-        .ok();
-        self.signature_type = SignatureType::Embedded;
+        self.timestamp_info(h_store, msg_signer_info);
 
         Self::release_embebed_cert(h_store, h_msg);
         Ok(())
@@ -327,6 +301,119 @@ impl CodeSigned {
             if admin_catalog.is_null() {
                 Self::release_catalog_enum(admin_context, admin_catalog);
                 return Ok(());
+            }
+        }
+    }
+
+    fn cert_data(
+        &self,
+        h_store: *mut c_void,
+        msg_signer_info: &mut CMSG_SIGNER_INFO,
+    ) -> Result<CertData> {
+        let mut cert_info: _CERT_INFO = unsafe { zeroed() };
+        cert_info.SerialNumber = msg_signer_info.SerialNumber;
+        cert_info.Issuer = msg_signer_info.Issuer;
+
+        let context = unsafe {
+            CertFindCertificateInStore(
+                h_store,
+                ENCODING,
+                0,
+                CERT_FIND_SUBJECT_CERT,
+                &cert_info as *const _ as _,
+                null(),
+            )
+        };
+
+        let needed: u32 = unsafe {
+            CertGetNameStringA(
+                context,
+                CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                0,
+                null_mut(),
+                null_mut(),
+                0,
+            )
+        };
+
+        let mut subject_name_data: Vec<u8> = vec![0; needed as usize];
+
+        unsafe {
+            CertGetNameStringA(
+                context,
+                CERT_NAME_SIMPLE_DISPLAY_TYPE,
+                0,
+                null_mut(),
+                subject_name_data.as_mut_ptr() as _,
+                needed as u32,
+            );
+        }
+
+        Ok(CertData {
+            serial_number: msg_signer_info.SerialNumber.to_string(),
+            issuer_name: msg_signer_info.Issuer.crypt_string(),
+            subject_name: String::from_utf8(
+                subject_name_data
+                    .into_iter()
+                    .take(needed as usize - 1)
+                    .collect::<Vec<u8>>(),
+            )
+            .ok(),
+        })
+    }
+
+    fn timestamp_info(&mut self, h_store: *mut c_void, msg_signer_info: CMSG_SIGNER_INFO) {
+        // Try to find timestamp information
+        let unauth_count = msg_signer_info.UnauthAttrs.cAttr;
+        let attrs =
+            unsafe { from_raw_parts_mut(msg_signer_info.UnauthAttrs.rgAttr, unauth_count as _) };
+
+        for attr in attrs {
+            if let Ok(oid) = unsafe { CStr::from_ptr(attr.pszObjId).to_str().map(String::from) } {
+                if oid == szOID_RSA_counterSign {
+                    let mut attr_needed = 0;
+
+                    let attr_blobs = unsafe { from_raw_parts_mut(attr.rgValue, attr.cValue as _) };
+
+                    for blob in attr_blobs {
+                        if unsafe {
+                            CryptDecodeObject(
+                                ENCODING,
+                                PKCS7_SIGNER_INFO,
+                                blob.pbData as _,
+                                blob.cbData,
+                                0,
+                                null_mut(),
+                                &mut attr_needed,
+                            ) == 0
+                        } {
+                            break;
+                        }
+
+                        let mut timestamp_data = vec![0u8; attr_needed as _];
+
+                        if unsafe {
+                            CryptDecodeObject(
+                                ENCODING,
+                                PKCS7_SIGNER_INFO,
+                                blob.pbData as _,
+                                blob.cbData,
+                                timestamp_data.len() as _,
+                                timestamp_data.as_mut_ptr() as _,
+                                &mut attr_needed,
+                            ) == 0
+                        } {}
+
+                        let mut timestamp: CMSG_SIGNER_INFO =
+                            unsafe { read(timestamp_data.as_mut_ptr() as _) };
+
+                        if let Ok(cert_data) = self.cert_data(h_store, &mut timestamp) {
+                            self.timestamp_serial_number = cert_data.serial_number;
+                            self.timestamp_subject_name = cert_data.subject_name;
+                            self.timestamp_issuer_name = cert_data.issuer_name;
+                        }
+                    }
+                }
             }
         }
     }
