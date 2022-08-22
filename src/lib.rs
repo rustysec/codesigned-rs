@@ -128,8 +128,8 @@ impl CodeSigned {
 
         match unsafe { WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _) }
         {
-            0 => this.embedded(&path)?,
-            _err => this.catalog(&path)?,
+            0 => this.process_embedded(&path)?,
+            _err => this.process_catalog(&path)?,
         }
 
         win_trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -141,13 +141,23 @@ impl CodeSigned {
         Ok(this)
     }
 
-    /// Determines if the file is signed
-    pub fn signed(&self) -> bool {
+    /// Returns if the file is signed
+    pub fn is_signed(&self) -> bool {
         self.signature_type != SignatureType::NotSigned
     }
 
+    /// Returns if the file is signed in a catalog
+    pub fn is_catalog(&self) -> bool {
+        self.signature_type != SignatureType::Catalog
+    }
+
+    /// Returns if the file is signed with an embedded certificate
+    pub fn is_embedded(&self) -> bool {
+        self.signature_type == SignatureType::Embedded
+    }
+
     /// Query for embeded certificate of a file.
-    fn embedded(&mut self, path: &U16CString) -> Result<()> {
+    fn process_embedded(&mut self, path: &U16CString) -> Result<()> {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
@@ -214,7 +224,7 @@ impl CodeSigned {
 
     /// Enumerates all the signature catalogs for one containing the hash of the file provided.
     /// If found the certificate information of the catalog is returned.
-    fn catalog(&mut self, path: &U16CString) -> Result<()> {
+    fn process_catalog(&mut self, path: &U16CString) -> Result<()> {
         let file_handle = unsafe {
             CreateFileW(
                 path.as_ptr(),
@@ -285,7 +295,7 @@ impl CodeSigned {
                 .map_err(Error::WideStringConversion)?
                 .to_ucstring();
 
-            self.embedded(&cat_path)?;
+            self.process_embedded(&cat_path)?;
             self.signature_type = SignatureType::Catalog;
 
             admin_catalog = unsafe {
