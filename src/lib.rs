@@ -148,7 +148,7 @@ impl CodeSigned {
 
     /// Returns if the file is signed in a catalog
     pub fn is_catalog(&self) -> bool {
-        self.signature_type != SignatureType::Catalog
+        self.signature_type == SignatureType::Catalog
     }
 
     /// Returns if the file is signed with an embedded certificate
