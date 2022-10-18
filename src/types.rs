@@ -10,18 +10,19 @@ use std::{
 use winapi::{
     shared::ntdef::LPCWSTR,
     um::{
-        fileapi::{CreateFileW, OPEN_EXISTING},
+        handleapi::CloseHandle,
         wincrypt::{
             CertNameToStrA, CERT_NAME_STR_REVERSE_FLAG, CERT_SIMPLE_NAME_STR, CRYPTOAPI_BLOB,
             PKCS_7_ASN_ENCODING, X509_ASN_ENCODING,
         },
-        winnt::{FILE_SHARE_READ, GENERIC_READ},
         wintrust::WINTRUST_FILE_INFO,
     },
 };
 
 /// Result of code signing operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+pub struct WinTrustFileInfo(pub WINTRUST_FILE_INFO);
 
 pub const ENCODING: u32 = X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
 
@@ -59,7 +60,7 @@ impl BlobToString for _CRYPTOAPI_BLOB {
 
         Some(
             bytes
-                .into_iter()
+                .iter_mut()
                 .map(|byte| format!("{:02X}", byte))
                 .collect::<Vec<_>>()
                 .join(""),
@@ -101,27 +102,28 @@ impl BlobToString for _CRYPTOAPI_BLOB {
     }
 }
 
-pub fn wintrust_file_info(path: LPCWSTR) -> Result<WINTRUST_FILE_INFO> {
-    let file_handle = unsafe {
-        CreateFileW(
-            path,
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            null_mut(),
-            OPEN_EXISTING,
-            0,
-            null_mut(),
-        )
-    };
-
-    if file_handle.is_null() {
-        return Err(Error::OpenFileFailed);
-    }
-
+pub fn wintrust_file_info(path: LPCWSTR) -> Result<WinTrustFileInfo> {
     Ok(WINTRUST_FILE_INFO {
         cbStruct: size_of::<WINTRUST_FILE_INFO>() as _,
         pcwszFilePath: path,
-        hFile: file_handle,
+        hFile: null_mut(),
         pgKnownSubject: null(),
-    })
+    }
+    .into())
+}
+
+impl From<WINTRUST_FILE_INFO> for WinTrustFileInfo {
+    fn from(file_info: WINTRUST_FILE_INFO) -> Self {
+        Self(file_info)
+    }
+}
+
+impl Drop for WinTrustFileInfo {
+    fn drop(&mut self) {
+        if !self.0.hFile.is_null() {
+            unsafe {
+                CloseHandle(self.0.hFile);
+            }
+        }
+    }
 }

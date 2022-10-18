@@ -16,7 +16,12 @@
 #![cfg(target_os = "windows")]
 #![warn(missing_docs)]
 
-#[allow(dead_code, non_camel_case_types, non_snake_case)]
+#[allow(
+    dead_code,
+    non_camel_case_types,
+    non_snake_case,
+    clippy::upper_case_acronyms
+)]
 mod api;
 mod error;
 mod types;
@@ -42,11 +47,14 @@ use winapi::um::{
         PKCS7_SIGNER_INFO,
     },
     winnt::{FILE_SHARE_READ, GENERIC_READ},
-    wintrust::{WINTRUST_DATA, WTD_CHOICE_FILE, WTD_STATEACTION_CLOSE, WTD_UI_NONE},
+    wintrust::{
+        WINTRUST_DATA, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
+        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+    },
 };
 
 /// Type of signature found
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 pub enum SignatureType {
     /// Not signed
@@ -107,21 +115,28 @@ pub struct CodeSigned {
 impl CodeSigned {
     /// Attempt to verify the signature status of a file at `path`.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mut this = Self::default();
-        this.path = path.as_ref().to_path_buf();
+        let mut this = Self {
+            path: path.as_ref().to_path_buf(),
+            ..Default::default()
+        };
 
         let path = path.as_ref().to_str().ok_or(Error::Unspecified)?;
         let path = U16CString::from_str(path).map_err(|_| Error::Unspecified)?;
 
         let mut file_info = wintrust_file_info(path.as_ptr())?;
 
-        let mut win_trust_data = WINTRUST_DATA::default();
-        win_trust_data.cbStruct = size_of::<WINTRUST_DATA>() as _;
-        win_trust_data.dwUIChoice = WTD_UI_NONE;
-        win_trust_data.dwUnionChoice = WTD_CHOICE_FILE;
+        let mut win_trust_data = WINTRUST_DATA {
+            cbStruct: size_of::<WINTRUST_DATA>() as _,
+            dwUIChoice: WTD_UI_NONE,
+            dwUnionChoice: WTD_CHOICE_FILE,
+            fdwRevocationChecks: WTD_REVOKE_NONE,
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            dwProvFlags: WTD_CACHE_ONLY_URL_RETRIEVAL,
+            ..Default::default()
+        };
 
         unsafe {
-            *(win_trust_data.u.pFile_mut()) = &mut file_info;
+            *(win_trust_data.u.pFile_mut()) = &mut file_info.0;
         }
 
         let mut action = wintrust_action_generic_verify_v2();
@@ -129,7 +144,9 @@ impl CodeSigned {
         match unsafe { WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _) }
         {
             0 => this.process_embedded(&path)?,
-            _err => this.process_catalog(&path)?,
+            _err => {
+                this.process_catalog(&path)?
+            }
         }
 
         win_trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -219,6 +236,9 @@ impl CodeSigned {
         self.timestamp_info(h_store, msg_signer_info);
 
         Self::release_embebed_cert(h_store, h_msg);
+
+        self.signature_type = SignatureType::Embedded;
+
         Ok(())
     }
 
