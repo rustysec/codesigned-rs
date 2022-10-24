@@ -1,15 +1,36 @@
 use codesigned::CodeSigned;
-use std::env::args;
+use std::{io::stdin, path::PathBuf};
+use structopt::StructOpt;
+
+#[derive(StructOpt)]
+struct Options {
+    file: PathBuf,
+    count: Option<u64>,
+}
 
 fn main() {
-    let path = args()
-        .nth(1)
-        .expect("Provide the path to a file for signature check");
+    let opts = Options::from_args();
 
-    println!("Checking Signature of {}", path);
+    println!("Checking Signature of {}", opts.file.display());
 
-    match CodeSigned::new(path) {
-        Err(err) => println!("An error occurred while verifying signature: {}", err),
-        Ok(cs) => println!("{:#?}", cs),
+    let count = opts.count.unwrap_or(1);
+
+    println!("count: {}", count);
+
+    for _ in 0..count {
+        match CodeSigned::new(&opts.file) {
+            Err(err) => println!("An error occurred while verifying signature: {}", err),
+            Ok(cs) => {
+                if count < 2 {
+                    println!("{:#?}", cs);
+                }
+            }
+        }
+    }
+
+    if count > 1 {
+        println!("Done, press enter to close");
+        let stdin = stdin();
+        let _ = stdin.lines().next().unwrap();
     }
 }

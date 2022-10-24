@@ -15,6 +15,9 @@ widestring = "0.4"
 cc = "1"
 bindgen = { version = "0.58", optional = true }
 
+[dev-dependencies]
+structopt = "0.3"
+
 [features]
 with-bindgen = [ "bindgen" ]
 serialize = [ "serde" ]
