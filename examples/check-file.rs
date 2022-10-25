@@ -17,11 +17,15 @@ fn main() {
 
     println!("count: {}", count);
 
-    for _ in 0..count {
+    for idx in 0..count {
         match CodeSigned::new(&opts.file) {
-            Err(err) => println!("An error occurred while verifying signature: {}", err),
+            Err(err) => {
+                if idx == 0 {
+                    println!("An error occurred while verifying signature: {}", err);
+                }
+            }
             Ok(cs) => {
-                if count < 2 {
+                if idx == 0 {
                     println!("{:#?}", cs);
                 }
             }

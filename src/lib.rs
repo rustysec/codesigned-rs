@@ -48,8 +48,8 @@ use winapi::um::{
     },
     winnt::{FILE_SHARE_READ, GENERIC_READ},
     wintrust::{
-        WINTRUST_DATA, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE, WTD_REVOKE_NONE,
-        WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+        WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE,
+        WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     },
 };
 
@@ -123,7 +123,12 @@ impl CodeSigned {
         let path = path.as_ref().to_str().ok_or(Error::Unspecified)?;
         let path = U16CString::from_str(path).map_err(|_| Error::Unspecified)?;
 
-        let mut file_info = wintrust_file_info(path.as_ptr())?;
+        let mut file_info = WINTRUST_FILE_INFO {
+            cbStruct: size_of::<WINTRUST_FILE_INFO>() as _,
+            pcwszFilePath: path.as_ptr(),
+            hFile: null_mut(),
+            pgKnownSubject: null(),
+        };
 
         let mut win_trust_data = WINTRUST_DATA {
             cbStruct: size_of::<WINTRUST_DATA>() as _,
@@ -136,7 +141,7 @@ impl CodeSigned {
         };
 
         unsafe {
-            *(win_trust_data.u.pFile_mut()) = &mut file_info.0;
+            *(win_trust_data.u.pFile_mut()) = &mut file_info;
         }
 
         let mut action = wintrust_action_generic_verify_v2();
@@ -144,12 +149,12 @@ impl CodeSigned {
         match unsafe { WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _) }
         {
             0 => this.process_embedded(&path)?,
-            _err => {
-                this.process_catalog(&path)?
-            }
+            _err => this.process_catalog(&path)?,
         }
 
         win_trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
+
+        let mut action = wintrust_action_generic_verify_v2();
 
         unsafe {
             WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _);
@@ -178,8 +183,8 @@ impl CodeSigned {
         let mut encoding: u32 = 0;
         let mut content_type: u32 = 0;
         let mut format_type: u32 = 0;
-        let mut h_store = null_mut();
-        let mut h_msg = null_mut();
+        let mut h_store: HCERTSTORE = null_mut();
+        let mut h_msg: HCRYPTMSG = null_mut();
 
         if unsafe {
             CryptQueryObject(
@@ -192,7 +197,7 @@ impl CodeSigned {
                 &mut content_type,
                 &mut format_type,
                 &mut h_store as _,
-                &mut h_msg as _,
+                &mut h_msg,
                 null_mut(),
             )
         } == 0
@@ -203,7 +208,6 @@ impl CodeSigned {
 
         let mut data_len: u32 = 0;
 
-        // get the parameter size
         unsafe {
             CryptMsgGetParam(h_msg, CMSG_SIGNER_INFO_PARAM, 0, null_mut(), &mut data_len);
         }
@@ -267,6 +271,9 @@ impl CodeSigned {
             CryptCATAdminCalcHashFromFileHandle(file_handle as _, &mut hash_length, null_mut(), 0)
         } == 0
         {
+            unsafe {
+                CloseHandle(file_handle);
+            }
             return Err(Error::UnableToHash(path.to_string_lossy()));
         }
 
@@ -281,15 +288,15 @@ impl CodeSigned {
             );
         }
 
+        unsafe {
+            CloseHandle(file_handle);
+        }
+
         let driver_action = driver_action_verify();
 
         let mut admin_context: HCATADMIN = null_mut();
         if unsafe { CryptCATAdminAcquireContext(&mut admin_context, &driver_action, 0) } == 0 {
             return Err(Error::AdminContext);
-        }
-
-        unsafe {
-            CloseHandle(file_handle);
         }
 
         let mut admin_catalog = unsafe {
@@ -455,15 +462,15 @@ impl CodeSigned {
         }
     }
 
-    fn release_embebed_cert(store: *mut c_void, msg: *mut c_void) {
-        if !store.is_null() {
-            unsafe {
-                CertCloseStore(store, 0);
-            }
-        }
+    fn release_embebed_cert(store: HCERTSTORE, msg: HCRYPTMSG) {
         if !msg.is_null() {
             unsafe {
-                CryptMsgClose(store);
+                CryptMsgClose(msg);
+            }
+        }
+        if !store.is_null() {
+            unsafe {
+                CertCloseStore(store, 1);
             }
         }
     }
