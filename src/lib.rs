@@ -146,11 +146,12 @@ impl CodeSigned {
 
         let mut action = wintrust_action_generic_verify_v2();
 
-        match unsafe { WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _) }
-        {
-            0 => this.process_embedded(&path)?,
-            _err => this.process_catalog(&path)?,
-        }
+        let result = match unsafe {
+            WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _)
+        } {
+            0 => this.process_embedded(&path),
+            _err => this.process_catalog(&path),
+        };
 
         win_trust_data.dwStateAction = WTD_STATEACTION_CLOSE;
 
@@ -159,6 +160,8 @@ impl CodeSigned {
         unsafe {
             WinVerifyTrust(null_mut(), &mut action, &mut win_trust_data as *mut _ as _);
         }
+
+        result?;
 
         Ok(this)
     }
@@ -318,11 +321,20 @@ impl CodeSigned {
                 return Err(Error::ExhaustedCatalogs);
             }
 
-            let cat_path = U16CStr::from_slice_with_nul(&cat_info.wszCatalogFile)
-                .map_err(Error::WideStringConversion)?
-                .to_ucstring();
+            let cat_path = U16CStr::from_slice(&cat_info.wszCatalogFile)
+                .map_err(Error::WideStringConversion)
+                .map(|path| path.to_ucstring());
 
-            self.process_embedded(&cat_path)?;
+            if let Err(err) = cat_path {
+                Self::release_catalog_enum(admin_context, admin_catalog);
+                return Err(err);
+            }
+
+            if let Err(err) = self.process_embedded(&cat_path?) {
+                Self::release_catalog_enum(admin_context, admin_catalog);
+                return Err(err);
+            }
+
             self.signature_type = SignatureType::Catalog;
 
             admin_catalog = unsafe {

@@ -1,23 +1,29 @@
 [package]
 name = "codesigned"
-version = "0.0.3"
+version = "0.0.5"
 authors = ["russ <rustysec@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-winapi = { version = "0.3", features = [ "impl-default", "errhandlingapi", "fileapi", "minwindef", "wintrust" ] }
+winapi = { version = "0.3", features = [
+    "impl-default",
+    "errhandlingapi",
+    "fileapi",
+    "minwindef",
+    "wintrust",
+] }
 cellophane = { git = "https://github.com/rustysec/cellophane-rs" }
-serde = { version = "1", features = [ "derive" ], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "1"
-widestring = "0.4"
+widestring = "1"
 
 [build-dependencies]
 cc = "1"
-bindgen = { version = "0.58", optional = true }
+bindgen = { version = "0.69", optional = true }
 
 [dev-dependencies]
 structopt = "0.3"
 
 [features]
-with-bindgen = [ "bindgen" ]
-serialize = [ "serde" ]
+with-bindgen = ["bindgen"]
+serialize = ["serde"]
