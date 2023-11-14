@@ -20,7 +20,7 @@ pub enum Error {
 
     /// Unable to convert a wide string
     #[error("Could not convert string: {0}")]
-    WideStringConversion(#[source] widestring::error::NulError<u16>),
+    WideStringConversion(#[source] widestring::error::MissingNulTerminator),
 
     /// Unable to get certificate store context
     #[error("Unable to obtain certificate store context")]

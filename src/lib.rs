@@ -321,7 +321,7 @@ impl CodeSigned {
                 return Err(Error::ExhaustedCatalogs);
             }
 
-            let cat_path = U16CStr::from_slice(&cat_info.wszCatalogFile)
+            let cat_path = U16CStr::from_slice_truncate(&cat_info.wszCatalogFile)
                 .map_err(Error::WideStringConversion)
                 .map(|path| path.to_ucstring());
 
