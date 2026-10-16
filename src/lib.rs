@@ -280,7 +280,6 @@ impl CodeSigned {
             return Err(Error::UnableToHash(path.to_string_lossy()));
         }
 
-        self.signature_type = SignatureType::Catalog;
         let mut hash_data: Vec<u8> = vec![0; hash_length as usize];
         unsafe {
             CryptCATAdminCalcHashFromFileHandle(
@@ -311,6 +310,12 @@ impl CodeSigned {
                 null_mut(),
             )
         };
+
+        // In no catalog and no valid embedded signature: not signed. An answer, not an error.
+        if admin_catalog.is_null() {
+            Self::release_catalog_enum(admin_context, admin_catalog);
+            return Ok(());
+        }
 
         loop {
             let mut cat_info: CATALOG_INFO = unsafe { zeroed() };
